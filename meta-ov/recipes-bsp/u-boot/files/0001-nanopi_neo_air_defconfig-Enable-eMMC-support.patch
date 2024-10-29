@@ -1,9 +1,9 @@
-From 6cd726e8a0ad08d7d9a5e40e9cb03c79960c7ee1 Mon Sep 17 00:00:00 2001
+From c65ccafc95c4311a6d45f72d636378db995abe06 Mon Sep 17 00:00:00 2001
 From: Florin Sarbu <florin@resin.io>
 Date: Wed, 12 Sep 2018 14:22:49 +0200
 Subject: [PATCH] nanopi_neo_air_defconfig: Enable eMMC support
 
-Upstream-status: Pending
+Upstream-Status: Pending [
 Signed-off-by: Florin Sarbu <florin@resin.io>
 
 ---

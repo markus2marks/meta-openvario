@@ -1,7 +1,9 @@
-From f55363f3fa78ce3e3dba04339315d0a2a211a195 Mon Sep 17 00:00:00 2001
+From dfcc231784ecd18370c38eeb122ee0d2a0e82fe6 Mon Sep 17 00:00:00 2001
 From: Marek Belisko <marek.belisko@open-nandra.com>
 Date: Fri, 8 Apr 2022 11:33:53 +0200
 Subject: [PATCH] Added nanopi-r1 board support
+
+Upstream-Status: Pending
 
 Patch taken from : https://github.com/armbian/build/blob/master/patch/u-boot/u-boot-sunxi/add-nanopi-r1-and-duo2.patch
 

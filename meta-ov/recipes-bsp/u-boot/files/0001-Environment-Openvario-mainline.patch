@@ -1,17 +1,19 @@
-From 920bf7cbd033c2730a50c2bf8977d12a8e0336e1 Mon Sep 17 00:00:00 2001
+From 6b5807374c2a243f11509911cce48450ccf81623 Mon Sep 17 00:00:00 2001
 From: Timo Bruderek <openvario@timoshome.org>
 Date: Sun, 12 May 2019 12:15:15 +0000
 Subject: [PATCH] Environment-Openvario-mainline
+
+Upstream-Status: Inappropriate [oe specific]
 
 ---
  include/configs/sunxi-common.h | 4 ++--
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/include/configs/sunxi-common.h b/include/configs/sunxi-common.h
-index e89ad42ce8..cf4e78e432 100644
+index d2d70f0fc2..594c512e3c 100644
 --- a/include/configs/sunxi-common.h
 +++ b/include/configs/sunxi-common.h
-@@ -295,8 +295,8 @@
+@@ -286,8 +286,8 @@
  
  #ifdef CONFIG_VIDEO
  #define CONSOLE_STDOUT_SETTINGS \
