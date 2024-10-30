@@ -1,7 +1,9 @@
-From 52afb904e332acb8178c5cae733bd872107dbc81 Mon Sep 17 00:00:00 2001
+From 221885343ea4af9a0c37a7a0be9f895d97e34c90 Mon Sep 17 00:00:00 2001
 From: Timo Bruderek <openvario@timoshome.org>
 Date: Sun, 26 May 2019 06:30:46 +0000
 Subject: [PATCH] Added RGB swap for RGB LCD
+
+Upstream-Status: Pending
 
 ---
  arch/arm/include/asm/arch-sunxi/lcdc.h | 1 +
@@ -22,10 +24,10 @@ index 90216bcfd5..2007b5ff14 100644
  #define SUNXI_LCDC_TCON0_DCLK_ENABLE		(0xf << 28)
  #define SUNXI_LCDC_TCON0_TIMING_H_BP(n)		(((n) - 1) << 0)
 diff --git a/drivers/video/Kconfig b/drivers/video/Kconfig
-index c841b99bb3..20e26bacc1 100644
+index 69f4809cf4..2b2ab6567c 100644
 --- a/drivers/video/Kconfig
 +++ b/drivers/video/Kconfig
-@@ -648,6 +648,11 @@ config VIDEO_TEGRA124
+@@ -752,6 +752,11 @@ config VIDEO_TEGRA124
  	   enables this support which can be used on devices which
  	   have an eDP display connected.
  
@@ -36,7 +38,7 @@ index c841b99bb3..20e26bacc1 100644
 +
  source "drivers/video/bridge/Kconfig"
  
- source "drivers/video/imx/Kconfig"
+ source "drivers/video/tegra20/Kconfig"
 diff --git a/drivers/video/sunxi/lcdc.c b/drivers/video/sunxi/lcdc.c
 index 73033c3b85..ffae2442fd 100644
 --- a/drivers/video/sunxi/lcdc.c
