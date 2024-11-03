@@ -11,7 +11,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/../../../meta-sunxi/recipes-bsp/u-boot/fi
 DEPENDS:append = " bc-native dtc-native swig-native python3-native flex-native bison-native "
 # sun50i: DEPENDS:append-sun50i = " atf-sunxi "
 
-COMPATIBLE_MACHINE = "(sun4i|sun5i|sun7i|sun8i|sun50i)"
+COMPATIBLE_MACHINE:sunxi = "(sun4i|sun5i|sun7i|sun8i|sun50i)"
 
 # DEFAULT_PREFERENCE-sun4i="1"
 # DEFAULT_PREFERENCE-sun5i="1"
