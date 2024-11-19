@@ -38,14 +38,14 @@ SRC_URI = " \
 SRC_URI:append:sunxi = " \
 	file://0004-Set-minimum-CPU-voltage-to-1.2V.patch\
 	\
-	file://openvario-common.dts \
-	file://openvario-43-rgb.dts \
-	file://openvario-57-lvds-DS2.dts \
-	file://openvario-57-lvds.dts \
-	file://openvario-7-AM070-DS2.dts \
-	file://openvario-7-CH070-DS2.dts \
-	file://openvario-7-CH070.dts \
-	file://openvario-7-PQ070.dts \
+	file://ov-cb2-common.dts \
+	file://ov-cb2-43-rgb.dts \
+	file://ov-cb2-57-lvds-ds2.dts \
+	file://ov-cb2-57-lvds.dts \
+	file://ov-cb2-7-am070-ds2.dts \
+	file://ov-cb2-7-ch070-ds2.dts \
+	file://ov-cb2-7-ch070.dts \
+	file://ov-cb2-7-pq070.dts \
 	\
 	file://sunxi.cfg \
 	file://drm.cfg \
@@ -61,7 +61,8 @@ KMACHINE ?= "${MACHINE}"
 KMETA = ".kernel-meta"
 
 do_configure:prepend:sunxi() {
-	cp ${WORKDIR}/openvario-*.dts ${S}/arch/arm/boot/dts/
+	cp ${WORKDIR}/ov-cb2-*.dts ${S}/arch/arm/boot/dts/
+	cp ${WORKDIR}/ov-*.dts ${S}/arch/arm/boot/dts/
 }
 
 FILES_${KERNEL_PACKAGE_NAME}-base:append = " ${nonarch_base_libdir}/modules/${KERNEL_VERSION}/modules.builtin.modinfo"
