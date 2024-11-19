@@ -1,4 +1,4 @@
-#include "openvario-common.dts"
+#include "ov-cb2-common.dts"
 
 // panel for 43-rgb is probably not LVDS.
 // TODO: find out device tree binding for it

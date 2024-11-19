@@ -53,3 +53,10 @@ Available machines for the OpenVario with the new adapter board DS2 are:
 ```
 bitbake openvario-image
 ```
+
+### Write image to SD Card
+
+for Raspberry PI
+```
+bmaptool copy --bmap <bmap-file.bmap> <wic-image.wic.*> /dev/sd[X]
+```

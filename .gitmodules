@@ -13,3 +13,6 @@
 [submodule "meta-arm"]
 	path = meta-arm
 	url = git://git.yoctoproject.org/meta-arm
+[submodule "meta-raspberrypi"]
+	path = meta-raspberrypi
+	url = git://git.yoctoproject.org/meta-raspberrypi

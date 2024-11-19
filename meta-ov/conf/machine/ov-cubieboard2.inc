@@ -11,3 +11,5 @@ MACHINE_FEATURES:remove = "apm"
 
 IMAGE_CLASSES += "sdcard_image-openvario"
 IMAGE_FSTYPES = "openvario-sdimg"
+
+PREFERRED_PROVIDER_virtual/kernel := "linux-openvario"

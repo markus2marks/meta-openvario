@@ -11,7 +11,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/../../../meta-sunxi/recipes-bsp/u-boot/fi
 DEPENDS:append = " bc-native dtc-native swig-native python3-native flex-native bison-native "
 # sun50i: DEPENDS:append-sun50i = " atf-sunxi "
 
-COMPATIBLE_MACHINE = "(sun4i|sun5i|sun7i|sun8i|sun50i)"
+COMPATIBLE_MACHINE:sunxi = "(sun4i|sun5i|sun7i|sun8i|sun50i)"
 
 # DEFAULT_PREFERENCE-sun4i="1"
 # DEFAULT_PREFERENCE-sun5i="1"
@@ -20,23 +20,26 @@ DEFAULT_PREFERENCE-sun7i="1"
 # DEFAULT_PREFERENCE-sun50i="1"
 
 # the nanopi-neo_air isn't used in openvario :), we need only the boot.cmd:
-SRC_URI:append = " file://boot.cmd "
+SRC_URI:append:cubieboard2 = " file://boot.cmd "
 #            file://0001-nanopi_neo_air_defconfig-Enable-eMMC-support.patch
 
-UBOOT_ENV_SUFFIX = "scr"
-UBOOT_ENV = "boot"
+
+UBOOT_ENV_SUFFIX:sunxi = "scr"
+UBOOT_ENV:sunxi = "boot"
 
 EXTRA_OEMAKE:append = ' HOSTLDSHARED="${BUILD_CC} -shared ${BUILD_LDFLAGS} ${BUILD_CFLAGS}" '
 # EXTRA_OEMAKE:append-sun50i = " BL31=${DEPLOY_DIR_IMAGE}/bl31.bin "
 
 # sun50i: do_compile-sun50i[depends] += "atf-sunxi:do_deploy"
 
-do_compile:append() {
+do_compile:append:cubieboard2() {
     ${B}/tools/mkimage -C none -A arm -T script -d ${WORKDIR}/boot.cmd ${WORKDIR}/${UBOOT_ENV_BINARY}
 }
 # ====================================================================================================
 # Add the files folder to the saerch path:
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
+
+SRC_URI:append:rpi = " file://memory_size.cfg"
 
 SRC_URI:append:cubieboard2 = " \
 	file://openvario.cfg \
