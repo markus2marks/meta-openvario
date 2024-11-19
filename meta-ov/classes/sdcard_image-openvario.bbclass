@@ -42,6 +42,9 @@ do_image_openvario_sdimg[depends] += " \
 SDIMG = "${IMGDEPLOYDIR}/${IMAGE_NAME}.rootfs.img"
 SDIMG_LINK = "${IMAGE_NAME_LINK}.rootfs.img"
 
+# Get IMAGE_VERSION_SUFFIX
+inherit compose_image-version-suffix
+
 IMAGE_CMD:openvario-sdimg () {
 
 	# Align partitions
