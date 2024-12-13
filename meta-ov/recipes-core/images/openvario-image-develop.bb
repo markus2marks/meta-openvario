@@ -11,6 +11,9 @@ IMAGE_INSTALL += "\
     sensord \
     variod \
     ovmenu-ng \
+    dtc \
+    i2c-tools \
+    raspi-gpio \
 "
 #   xcsoar 
-export IMAGE_BASENAME = "openvario-image"
+export IMAGE_BASENAME = "openvario-image-develop"
