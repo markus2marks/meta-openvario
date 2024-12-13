@@ -4,7 +4,7 @@
 / {
     compatible = "brcm,bcm2835";
     
-        /* PWM0 function */
+    /* PWM0 function */
     fragment@0 {
         target = <&gpio>;
         __overlay__ {
@@ -128,6 +128,16 @@
                     data-lanes = <0 1>;
                 };
             };
+        };
+    };
+
+    /* Enable I2C1 */
+    fragment@5 {
+        target = <&i2c1>;
+        __overlay__ {
+            status = "okay";
+            pinctrl-0 = <&i2c1_gpio44>;
+            clock-frequency = <100000>;
         };
     };
 };
