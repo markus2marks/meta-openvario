@@ -4,7 +4,7 @@
 / {
     compatible = "brcm,bcm2835";
     
-    /* PWM0 function */
+        /* PWM0 function */
     fragment@0 {
         target = <&gpio>;
         __overlay__ {
@@ -37,10 +37,10 @@
                 regulator-always-on;
             };
         
-            backlight_pwm: backlight_pwm {
+            lcd: lcd {
                 compatible = "pwm-backlight";
                 brightness-levels = <0 6 8 12 16 24 32 40 48 64 96 128 160 192 224 255>;
-                default-brightness-level = <16>;
+                default-brightness-level = <15>;
                 pwms = <&pwm 0 200000 0>;
             };
 
@@ -48,7 +48,7 @@
             panel: panel {
                 compatible = "yes,yts700tlbc-02-100c", "panel-lvds";
 
-                backlight = <&backlight_pwm>;
+                backlight = <&lcd>;
                 power-supply = <0>;
 
                 /* Physical dimensions of active area */
@@ -130,14 +130,14 @@
             };
         };
     };
-
+    
     /* Enable I2C1 */
     fragment@5 {
         target = <&i2c1>;
         __overlay__ {
             status = "okay";
             pinctrl-0 = <&i2c1_gpio44>;
-            clock-frequency = <100000>;
+            clock-frequency = <400000>;
         };
     };
 };

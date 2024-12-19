@@ -12,7 +12,7 @@ do_deploy:append () {
         echo "# Enable 57 LVDS" >> $CONFIG
         echo "dtoverlay=ov-rpi4-57-lvds" >> $CONFIG
         
-        # Set the used I2C Pins für LVDS Bridge
-        echo "dtoverlay=i2c1,pins_44_45=1" >> $CONFIG
+        # enable usb OTG mode
+        echo "otg_mode=1" >> $CONFIG
     fi
 }
