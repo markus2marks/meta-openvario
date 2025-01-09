@@ -268,7 +268,7 @@ function submenu_rotation() {
 
 		# update config
 		# uboot rotation
-		sed -i 's/^rotation=.*/rotation='$menuitem'/' /boot/config.uEnv
+		sed -i 's/fbcon=rotate:.*/fbcon=rotate:'${menuitem}'/' /boot/cmdline.txt
 		echo "$menuitem" >/sys/class/graphics/fbcon/rotate_all
 		dialog --msgbox "New Setting saved !!\n Touch recalibration required !!" 10 50
 	else

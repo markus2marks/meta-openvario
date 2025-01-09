@@ -11,8 +11,5 @@ do_deploy:append () {
         # Use the machine specific device tree overlay
         echo "# Enable 57 LVDS" >> $CONFIG
         echo "dtoverlay=ov-rpi4-57-lvds" >> $CONFIG
-        
-        # enable usb OTG mode
-        echo "otg_mode=1" >> $CONFIG
     fi
 }
