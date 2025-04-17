@@ -8,30 +8,30 @@ COMPATIBLE_MACHINE ?= "^rpi$"
 PE = "1"
 PV = "${LINUX_VERSION}+git${SRCPV}"
 
-LINUX_VERSION ?= "6.6.22"
+LINUX_VERSION ?= "6.6.63"
 LINUX_RPI_BRANCH ?= "rpi-6.6.y"
 LINUX_RPI_KMETA_BRANCH ?= "yocto-6.6"
 
-SRCREV_machine = "c04af98514c26014a4f29ec87b3ece95626059bd"
-SRCREV_meta = "6a24861d6504575a4a9f92366285332d47c7e111"
+SRCREV_machine = "e442e5c1ab6bff5b5460b4fc949beb72aaf77970"
+SRCREV_meta = "52ff0d75713ce61962b325a2090bd55e216f0cf3"
 
-inherit siteinfo
+KMETA = "kernel-meta"
+inherit siteinfo rauc-integration
+
 require recipes-kernel/linux/linux-yocto.inc
 
-SRC_URI = "git://github.com/raspberrypi/linux.git;name=machine;branch=${LINUX_RPI_BRANCH};protocol=https \
-           git://git.yoctoproject.org/yocto-kernel-cache;type=kmeta;name=meta;branch=${LINUX_RPI_KMETA_BRANCH};destsuffix=kernel-meta \
-           file://powersave.cfg \
-           file://lvds_bridge.cfg \
-           file://debloat.cfg \
-           file://console.cfg \
-           ${@bb.utils.contains("INITRAMFS_IMAGE_BUNDLE", "1", "file://initramfs-image-bundle.cfg", "", d)} \
-           ${@bb.utils.contains("MACHINE_FEATURES", "vc4graphics", "file://vc4graphics.cfg", "", d)} \
-           ${@bb.utils.contains("MACHINE_FEATURES", "wm8960", "file://wm8960.cfg", "", d)} \
-           file://default-cpu-governor.cfg \
-           file://rpi4-nvmem.cfg \
-           file://0001-Add-ov-devicetree-to-Makefile.patch \
-           file://ov-rpi4-57-lvds-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
-           "
+SRC_URI = " \
+    git://github.com/raspberrypi/linux.git;name=machine;branch=${LINUX_RPI_BRANCH};protocol=https \
+    git://git.yoctoproject.org/yocto-kernel-cache;type=kmeta;name=meta;branch=${LINUX_RPI_KMETA_BRANCH};destsuffix=${KMETA} \
+    ${@bb.utils.contains("INITRAMFS_IMAGE_BUNDLE", "1", "file://initramfs-image-bundle.cfg", "", d)} \
+    ${@bb.utils.contains("MACHINE_FEATURES", "vc4graphics", "file://vc4graphics.cfg", "", d)} \
+    ${@bb.utils.contains("MACHINE_FEATURES", "wm8960", "file://wm8960.cfg", "", d)} \
+    file://default-cpu-governor.cfg \
+    file://powersave.cfg \
+    file://flyberry.cfg \
+    file://flyberry-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
+    file://rauc.cfg \
+    "
 
 SRC_URI:append:raspberrypi4 = " \
     file://rpi4-nvmem.cfg \
@@ -68,3 +68,6 @@ RDEPENDS:${KERNEL_PACKAGE_NAME}-dbg:raspberrypi-armv7:append = " ${RASPBERRYPI_v
 DEPLOYDEP = ""
 DEPLOYDEP:raspberrypi-armv7 = "${RASPBERRYPI_v7_KERNEL}:do_deploy"
 do_deploy[depends] += "${DEPLOYDEP}"
+
+SRC_URI:append:rauc-integration = " file://rauc.cfg"
+CMDLINE:remove:rauc-integration = "root=/dev/mmcblk0p2"

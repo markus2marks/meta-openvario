@@ -9,14 +9,11 @@ do_deploy:append () {
     if [ "${MACHINE}" = "ov-rpi4-64" ]; then
         
         # Use the machine specific device tree overlay
-        echo "# Enable 57 LVDS" >> $CONFIG
-        echo "dtoverlay=ov-rpi4-57-lvds" >> $CONFIG
+        echo "# flyberry" >> $CONFIG
+        echo "dtoverlay=flyberry" >> $CONFIG
         
         echo "# sound driver" >> $CONFIG
-        echo "dtoverlay=max98357a" >> $CONFIG
 
         echo "# serial interfaces" >> $CONFIG
-        echo "dtoverlay=uart2" >> $CONFIG
-        echo "dtoverlay=uart3" >> $CONFIG
     fi
 }
