@@ -370,7 +370,7 @@ function upload_files(){
 }
 
 function start_xcsoar() {
-	/usr/bin/xcsoar -fly
+	/usr/bin/xcsoar -fly -dpi=100
 	sync
 }
 
