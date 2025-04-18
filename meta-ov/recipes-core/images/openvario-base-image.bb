@@ -47,6 +47,7 @@ IMAGE_INSTALL = " \
     ${COMMON_WIFI_FIRMWARE_PACKAGES} \
     ${LOCALE_PACKAGES} \
     fix-cpu-freq\
+    rauc \
 "
 
 #                    packagegroup-base packagegroup-core-ssh-openssh 

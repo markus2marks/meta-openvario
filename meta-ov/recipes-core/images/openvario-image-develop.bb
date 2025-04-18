@@ -17,7 +17,6 @@ IMAGE_INSTALL += "\
     raspi-gpio \
     whiptail \
     net-tools \
-    rauc \
 "
 
 #   xcsoar 

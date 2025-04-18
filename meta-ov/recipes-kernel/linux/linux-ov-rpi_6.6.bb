@@ -28,8 +28,8 @@ SRC_URI = " \
     ${@bb.utils.contains("MACHINE_FEATURES", "wm8960", "file://wm8960.cfg", "", d)} \
     file://default-cpu-governor.cfg \
     file://powersave.cfg \
-    file://flyberry.cfg \
-    file://flyberry-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
+    file://lvds_bridge.cfg \
+    file://ov-rpi4-57-lvds-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
     file://rauc.cfg \
     "
 

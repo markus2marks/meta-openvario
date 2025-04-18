@@ -39,8 +39,8 @@
         
             lcd: lcd {
                 compatible = "pwm-backlight";
-                brightness-levels = <0 6 8 12 16 24 32 40 48 64 96 128 160 192 224 255>;
-                default-brightness-level = <15>;
+                brightness-levels = < 24 32 40 48 64 96 128 160 192 224 255>;
+                default-brightness-level = <10>;
                 pwms = <&pwm 0 200000 0>;
             };
 
@@ -59,14 +59,14 @@
 
                 panel-timing {
                     clock-frequency = <25000000>; /* pixel clock is 3GHz / 60 */
-                    hactive = <1280>;
-                    vactive = <800>;
-                    hsync-len = <69>;
-                    hfront-porch = <64>;
-                    hback-porch = <5>;
+                    hactive = <640>;
+                    vactive = <480>;
+                    hsync-len = <30>;
+                    hfront-porch = <20>;
+                    hback-porch = <114>;
                     vfront-porch = <15>;
                     vback-porch = <33>;
-                    vsync-len = <42>;
+                    vsync-len = <3>;
                     hsync-active = <1>; 
                     vsync-active = <1>;
                     de-active = <1>; 
