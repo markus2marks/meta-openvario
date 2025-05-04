@@ -80,7 +80,9 @@ do_install() {
 }
 
 FILES:${PN} = " \
-	${bindir}/xcsoar \
-	${bindir}/vali-xcs \
-	${datadir}/locale/*/LC_MESSAGES/xcsoar.mo \
+    ${bindir} \
+    ${datadir}/locale  \
+    ${datadir}/locale/bg \
+    ${datadir}/locale/de \
+    ${datadir}/locale/fr \
 "

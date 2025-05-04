@@ -8,6 +8,7 @@ IMAGE_INSTALL += "\
     xcsoar-menu \
     xcsoar-profiles \
     xcsoar-maps-default \
+    xcsoar-locale \
     caltool \
     sensord \
     variod \
@@ -15,7 +16,6 @@ IMAGE_INSTALL += "\
     dtc \
     i2c-tools \
     raspi-gpio \
-    whiptail \
     net-tools \
 "
 
