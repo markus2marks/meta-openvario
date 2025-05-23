@@ -4,18 +4,12 @@ require openvario-base-image.bb
 IMAGE_ROOTFS_SIZE ?= "1048576"
 
 IMAGE_INSTALL += "\
-    xcsoar \
-    xcsoar-menu \
-    xcsoar-profiles \
-    xcsoar-maps-default \
-    caltool \
-    sensord \
-    variod \
-    ovmenu-ng \
+    enroute \
+    fontconfig \
+    ttf-opensans \
     dtc \
     i2c-tools \
     raspi-gpio \
-    whiptail \
     net-tools \
     rauc \
 "
