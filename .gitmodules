@@ -16,3 +16,6 @@
 [submodule "meta-raspberrypi"]
 	path = meta-raspberrypi
 	url = git://git.yoctoproject.org/meta-raspberrypi
+[submodule "meta-rauc"]
+	path = meta-rauc
+	url = https://github.com/rauc/rauc
