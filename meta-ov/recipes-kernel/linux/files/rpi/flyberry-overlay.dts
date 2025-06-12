@@ -30,7 +30,7 @@
            lcd: lcd {
 				compatible = "pwm-backlight";
 				brightness-levels = <255 180 150 120 100 90 80 70 60 40>;
-				default-brightness-level = <10>;
+				default-brightness-level = <6>;
 				pwms = <&pwm 0 200000 0>;
 			};
         };
