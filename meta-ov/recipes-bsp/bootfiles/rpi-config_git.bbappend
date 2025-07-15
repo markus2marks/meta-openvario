@@ -3,9 +3,9 @@
 
 do_deploy:append () {
 
-	CONFIG=${DEPLOYDIR}/${BOOTFILES_DIR_NAME}/config.txt
+    CONFIG=${DEPLOYDIR}/${BOOTFILES_DIR_NAME}/config.txt
 
-     # Openvario 57 LVDS
+    # Openvario 57 LVDS
     if [ "${MACHINE}" = "ov-rpi4-64" ]; then
         
         # Use the machine specific device tree overlay

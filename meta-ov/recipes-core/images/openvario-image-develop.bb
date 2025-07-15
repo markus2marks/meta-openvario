@@ -4,9 +4,15 @@ require openvario-base-image.bb
 IMAGE_ROOTFS_SIZE ?= "1048576"
 
 IMAGE_INSTALL += "\
-    enroute \
-    fontconfig \
-    ttf-opensans \
+    xcsoar \
+    xcsoar-menu \
+    xcsoar-profiles \
+    xcsoar-maps-default \
+    xcsoar-locale \
+    caltool \
+    sensord \
+    variod \
+    ovmenu-ng \
     dtc \
     i2c-tools \
     raspi-gpio \

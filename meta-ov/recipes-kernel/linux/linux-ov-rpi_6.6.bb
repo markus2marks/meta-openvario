@@ -8,12 +8,12 @@ COMPATIBLE_MACHINE ?= "^rpi$"
 PE = "1"
 PV = "${LINUX_VERSION}+git${SRCPV}"
 
-LINUX_VERSION ?= "6.6.63"
+LINUX_VERSION ?= "6.6.22"
 LINUX_RPI_BRANCH ?= "rpi-6.6.y"
 LINUX_RPI_KMETA_BRANCH ?= "yocto-6.6"
 
-SRCREV_machine = "e442e5c1ab6bff5b5460b4fc949beb72aaf77970"
-SRCREV_meta = "52ff0d75713ce61962b325a2090bd55e216f0cf3"
+SRCREV_machine = "c04af98514c26014a4f29ec87b3ece95626059bd"
+SRCREV_meta = "6a24861d6504575a4a9f92366285332d47c7e111"
 
 KMETA = "kernel-meta"
 inherit siteinfo rauc-integration
@@ -29,9 +29,7 @@ SRC_URI = " \
     file://default-cpu-governor.cfg \
     file://powersave.cfg \
     file://flyberry.cfg \
-    file://lvds_bridge.cfg \
-    file://ov-rpi4-57-lvds-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
-    file://ds7846-touch-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
+    file://flyberry-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
     file://rauc.cfg \
     "
 
