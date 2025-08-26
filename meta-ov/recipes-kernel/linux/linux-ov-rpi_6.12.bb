@@ -8,12 +8,12 @@ COMPATIBLE_MACHINE ?= "^rpi$"
 PE = "1"
 PV = "${LINUX_VERSION}+git${SRCPV}"
 
-LINUX_VERSION ?= "6.6.63"
-LINUX_RPI_BRANCH ?= "rpi-6.6.y"
-LINUX_RPI_KMETA_BRANCH ?= "yocto-6.6"
+LINUX_VERSION ?= "6.12.25"
+LINUX_RPI_BRANCH ?= "rpi-6.12.y"
+LINUX_RPI_KMETA_BRANCH ?= "yocto-6.12"
 
-SRCREV_machine = "e442e5c1ab6bff5b5460b4fc949beb72aaf77970"
-SRCREV_meta = "52ff0d75713ce61962b325a2090bd55e216f0cf3"
+SRCREV_machine = "3dd2c2c507c271d411fab2e82a2b3b7e0b6d3f16"
+SRCREV_meta = "1f6ab68a1d86836bf1b82b791df03da3cfeacb3f"
 
 KMETA = "kernel-meta"
 inherit siteinfo rauc-integration
@@ -43,6 +43,7 @@ KCONFIG_MODE = "--alldefconfig"
 KBUILD_DEFCONFIG:raspberrypi4 ?= "bcm2711_defconfig"
 KBUILD_DEFCONFIG:raspberrypi4-64 ?= "bcm2711_defconfig"
 KBUILD_DEFCONFIG:raspberrypi5 ?= "bcm2712_defconfig"
+KBUILD_DEFCONFIG:ov-rpi5 ?= "bcm2712_defconfig"
 
 LINUX_VERSION_EXTENSION ?= ""
 

@@ -19,4 +19,13 @@ do_deploy:append () {
         echo "dtoverlay=uart2" >> $CONFIG
         echo "dtoverlay=uart3" >> $CONFIG
     fi
+    
+    if [ "${MACHINE}" = "ov-rpi5" ]; then
+        
+        # Use the machine specific device tree overlay
+        echo "# Enable 57 LVDS" >> $CONFIG
+        echo "dtoverlay=ov-rpi5-57-lvds" >> $CONFIG
+        echo "dtparam=i2c_csi_dsi=on" >> $CONFIG
+        echo "device_tree=bcm2712-rpi-cm5l-cm4io.dtb" >> $CONFIG
+    fi
 }
