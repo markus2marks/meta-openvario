@@ -26,6 +26,7 @@ DEPENDS = "	\
 		c-ares \
 		fmt \
 		dbus \
+		libx11 \
 "
 
 RDEPENDS:${PN} = "\
@@ -35,6 +36,7 @@ RDEPENDS:${PN} = "\
 S = "${WORKDIR}/git"
 
 LC_LOCALE_PATH = "${datadir}/locale"
+
 
 SRC_URI += " \
 	file://0007-Disable-touch-screen-auto-detection.patch \
@@ -58,8 +60,9 @@ EXTRA_OEMAKE = " \
 	CCACHE='' \
 	\
 	DEBUG=n DEBUG_GLIBCXX=n \
-	ENABLE_MESA_KMS=y GLES2=y \
 	GEOTIFF=n \
+	EGL=y \
+	USE_X11=y \
 "
 
 do_configure() {

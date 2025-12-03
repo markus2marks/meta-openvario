@@ -1,0 +1,81 @@
+/*
+ * Device Tree overlay to connect a DXQ5D4024 DSI panel to DSI1.
+ * This uses 4 DSI data lanes, so can only be used with a Compute Module.
+ *
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835";
+
+	fragment@0 {
+		target = <&dsi1>;
+		__overlay__{
+			status = "okay";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			port {
+				dsi_out_port:endpoint {
+					remote-endpoint = <&panel_dsi_port>;
+				};
+			};
+
+			lt070me05000:lt070me05000@0 {
+				compatible    = "dxq,dxq5d5024";
+				status        = "okay";
+				reg           = <0>;
+				reset-gpios   = <&gpio 26 1>;   // LCD RST
+				enable-gpios  = <&gpio 4 0>;    // LCD Enable
+				dcdc-en-gpios = <&gpio 16 0>;    // LCD DC-DC Enable
+				port {
+					panel_dsi_port: endpoint {
+						remote-endpoint = <&dsi_out_port>;
+					};
+				};
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&gpio>;
+		__overlay__ {
+			lt070me05000_pins: lt070me05000_pins {
+				brcm,pins = <4 5 17>;
+				brcm,function = <1 1 1>; // out
+				brcm,pull = <0 0 0>; // off
+			};
+		};
+
+	};
+	
+	fragment@2 {
+		target = <&i2c6>;
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			ft5426@38 {
+				compatible = "focaltech,ft5426", "edt,edt-ft5406";
+				reg = <0x38>;
+		
+				interrupt-parent = <&gpio>;
+				interrupts = <2 0x2>; /* falling edge */
+		
+				touchscreen-size-x = <1080>;
+				touchscreen-size-y = <1920>;
+			};
+		};
+	};
+
+	__overrides__ {
+		reset = <&lt070me05000_pins>,"brcm,pins:8",
+			<&lt070me05000>,"reset-gpios:4";
+
+		enable = <&lt070me05000_pins>,"brcm,pins:0",
+			<&lt070me05000>,"enable-gpios:4";
+
+		dcdc-en = <&lt070me05000_pins>,"brcm,pins:4",
+			<&lt070me05000>,"dcdc-en-gpios:4";
+	};
+};

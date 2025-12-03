@@ -1,0 +1,861 @@
+diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
+index 928b9f1bf7d5..aafcfe289990 100644
+--- a/drivers/gpu/drm/panel/Kconfig
++++ b/drivers/gpu/drm/panel/Kconfig
+@@ -293,6 +293,13 @@ config DRM_PANEL_JDI_LPM102A188A
+ 	  The panel has a 2560×1800 resolution. It provides a MIPI DSI interface
+ 	  to the host.
+ 
++config DRM_PANEL_DXQ5D5024
++	tristate "DXQ5D5024 DSI panel"
++	depends on OF
++	depends on DRM_MIPI_DSI
++	depends on BACKLIGHT_CLASS_DEVICE
++
++
+ config DRM_PANEL_JDI_LT070ME05000
+ 	tristate "JDI LT070ME05000 WUXGA DSI panel"
+ 	depends on OF
+diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
+index c13a08111d0c..a4200d1c77a5 100644
+--- a/drivers/gpu/drm/panel/Makefile
++++ b/drivers/gpu/drm/panel/Makefile
+@@ -104,3 +104,4 @@ obj-$(CONFIG_DRM_PANEL_WAVESHARE_TOUCHSCREEN) += panel-waveshare-dsi.o
+ obj-$(CONFIG_DRM_PANEL_WAVESHARE_TOUCHSCREEN_V2) += panel-waveshare-dsi-v2.o
+ obj-$(CONFIG_DRM_PANEL_WIDECHIPS_WS2401) += panel-widechips-ws2401.o
+ obj-$(CONFIG_DRM_PANEL_XINPENG_XPP055C272) += panel-xinpeng-xpp055c272.o
++obj-$(CONFIG_DRM_PANEL_DXQ5D5024) +=panel-dxq5d5024.o
+diff --git a/drivers/gpu/drm/panel/panel-dxq5d5024.c b/drivers/gpu/drm/panel/panel-dxq5d5024.c
+new file mode 100644
+index 000000000000..3d139e08d919
+--- /dev/null
++++ b/drivers/gpu/drm/panel/panel-dxq5d5024.c
+@@ -0,0 +1,828 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (C) 2016 InforceComputing
++ * Author: Vinay Simha BN <simhavcs@gmail.com>
++ *
++ * Copyright (C) 2016 Linaro Ltd
++ * Author: Sumit Semwal <sumit.semwal@linaro.org>
++ *
++ * From internet archives, the panel for Nexus 7 2nd Gen, 2013 model is a
++ * JDI model LT070ME05000, and its data sheet is at:
++ * http://panelone.net/en/7-0-inch/JDI_LT070ME05000_7.0_inch-datasheet
++ */
++
++#include <linux/backlight.h>
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/regulator/consumer.h>
++
++#include <video/mipi_display.h>
++
++#include <drm/drm_crtc.h>
++#include <drm/drm_mipi_dsi.h>
++#include <drm/drm_modes.h>
++#include <drm/drm_panel.h>
++
++static const char * const regulator_names[] = {
++	"vddp",
++	"iovcc"
++};
++
++struct dxq_panel {
++	struct drm_panel base;
++	struct mipi_dsi_device *dsi;
++
++	struct regulator_bulk_data supplies[ARRAY_SIZE(regulator_names)];
++
++	struct gpio_desc *enable_gpio;
++	struct gpio_desc *reset_gpio;
++	struct gpio_desc *dcdc_en_gpio;
++	struct backlight_device *backlight;
++
++	bool prepared;
++	bool enabled;
++
++	const struct drm_display_mode *mode;
++};
++
++static inline struct dxq_panel *to_dxq_panel(struct drm_panel *panel)
++{
++	return container_of(panel, struct dxq_panel, base);
++}
++
++static int dxq_panel_init(struct dxq_panel *dxq)
++{
++	struct mipi_dsi_device *dsi = dxq->dsi;
++	struct device *dev = &dxq->dsi->dev;
++	int ret;
++
++	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
++
++	ret = mipi_dsi_dcs_soft_reset(dsi);
++	if (ret < 0)
++		return ret;
++
++	usleep_range(10000, 20000);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x01},1);
++	usleep_range(10000, 20000);
++
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x00},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xFF,0x87,0x36,0x01},4);
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x80},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xFF,0x87,0x36},3);
++
++
++	// C090H CKH vdo cmd timing setting
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x90},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xC0,0x00,0x00,0x05,0x05,0x05,0x05,0x06,0x06,0x01,0x01,0x17,0x17,0x05,0x05}, 15);
++
++
++	// CE80H CKH re pre scan timing setting
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xB0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xCE,0x00,0x05,0x05,0x06,0x01,0x2E,0x05,0x00,0x05,0x05,0x06,0x01,0x18,0x05}, 15);
++
++
++	// C280 C2B0 VST & CLK setting
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x80},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xC2,0x82,0x00,0x12,0x00,0x81,0x00,0x12,0x00},9);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xB0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xC2,0x00,0x08,0x00,0x12,0x81,0x01,0x09,0x00,0x12,0x81,0x02,0x0A,0x00,0x12,0x81},16);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xC0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xC2,0x03,0x0B,0x00,0x12,0x81,0x04,0x04,0x00,0x12,0x81,0x05,0x05,0x00,0x12,0x81},16);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xD0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xC2,0x06,0x06,0x00,0x12,0x81,0x07,0x07,0x00,0x12,0x81},11);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xDA},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xC2,0x77,0x77,0x77,0x77},5);
++
++
++	// C3C0H CKV auto det setting
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xC0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xC3,0x01,0x99,0x99,0x99,0x9C},6);
++
++
++	// Panel IF // 20170119
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x80},2);	// U 2 D	CC80
++	mipi_dsi_generic_write(dsi, (u8[]){0xCC,0x02,0x03,0x06,0x07,0x08,0x09,0x0A,0x0B,0x0C,0x0D,0x22,0x22},13);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x90},2);	// D 2 U	CC90
++	mipi_dsi_generic_write(dsi, (u8[]){0xCC,0x03,0x02,0x0D,0x0C,0x0B,0x0A,0x09,0x08,0x07,0x06,0x22,0x22},13);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xA0},2);	// no dir 1	CCA0
++	mipi_dsi_generic_write(dsi, (u8[]){0xCC,0x1A,0x1B,0x1C,0x1D,0x1E,0x1F,0x16,0x17,0x01,0x20,0x22,0x22,0x22,0x22,0x22},16);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xB0},2);	// no dir 2	CCB0
++	mipi_dsi_generic_write(dsi, (u8[]){0xCC,0x22,0x22,0x22,0x22,0x22},6);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x80},2);	// slp in	CB80
++	mipi_dsi_generic_write(dsi, (u8[]){0xCB,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},9);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x90},2);	// power on 1	CB90
++	mipi_dsi_generic_write(dsi, (u8[]){0xCB,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},16);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xA0},2);	// power on 2	CBA0
++	mipi_dsi_generic_write(dsi, (u8[]){0xCB,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},16);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xB0},2);	// power on 3	CBB0
++	mipi_dsi_generic_write(dsi, (u8[]){0xCB,0x00,0x00},3);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xC0},2);	// power off 1	CBC0
++	mipi_dsi_generic_write(dsi, (u8[]){0xCB,0xF5,0xF5,0xF5,0xF5,0xF5,0xF5,0xF5,0xF5,0xF5,0xF5,0x00,0x00,0xF5,0xF5,0xF5},16);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xD0},2);	// power off 2	CBD0
++	mipi_dsi_generic_write(dsi, (u8[]){0xCB,0x05,0x05,0x05,0x0F,0xF0,0x00,0x09,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},16);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xE0},2);	// power off 3	CBE0
++	mipi_dsi_generic_write(dsi, (u8[]){0xCB,0x00,0x00},3);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xF0},2);	// L V D	CBF0
++	mipi_dsi_generic_write(dsi, (u8[]){0xCB,0xFF,0xFF,0xFF,0x3F,0xC0,0x00,0x00,0x00},9);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x80},2);	// CGOUT R 1	CD80
++	mipi_dsi_generic_write(dsi, (u8[]){0xCD,0x22,0x22,0x22,0x01,0x22,0x09,0x07,0x05,0x03,0x13,0x14,0x22,0x10,0x11,0x12},16);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x90},2);	// CGOUT R 2	CD90
++	mipi_dsi_generic_write(dsi, (u8[]){0xCD,0x0D,0x0E,0x0F},4);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xA0},2);	// CGOUT L 1	CDA0
++	mipi_dsi_generic_write(dsi, (u8[]){0xCD,0x22,0x22,0x22,0x02,0x22,0x0A,0x08,0x06,0x04,0x13,0x14,0x22,0x10,0x11,0x12},16);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xB0},2);	// CGOUT L 2	CDB0
++	mipi_dsi_generic_write(dsi, (u8[]){0xCD,0x0D,0x0E,0x0F},4);
++
++
++	// F381H All gate on off setting
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x81},2);	// All gate on off	F381
++	mipi_dsi_generic_write(dsi, (u8[]){0xF3,0xE8,0x85,0xC0,0xE8,0x85,0xC0,0xE8,0x85,0xC0,0xE8,0x85,0xC0},13);
++
++
++	// A582H CKH BP FP setting
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x82},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xA5,0x00,0x00,0x00},4);
++
++
++	// A587H CKH TP term setting
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x87},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xA5,0x00,0x07,0x77,0x00,0x07,0x07},7);
++
++
++	// B3A0H - G swap Soft panel setting
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xA0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xB3,0x03,0x04,0x38,0x07,0x80,0x00,0x40},8); //SWAP G
++
++
++	// B086H - 20150630 add 20150715 add
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x86},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xB0,0x0B},2);
++
++	// C580H - Pump & regulator
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x80},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xC5,0x00,0x01,0xDD,0x00,0x14,0x1E,0x00,0x55,0x50,0x05},11); //toggle 4V
++
++	// C590H - power control setting
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x90},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xC5,0x44,0x1B,0x05,0x00,0x88,0x00,0x3C,0x50,0x55,0x50},11);//VGHO2=9V 0x1E VGLO2=-7V 0x14
++
++
++	// D800H - GVDDP GVDDN					//  GVDD & NGVDD  +-5V
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x00},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xD8,0x2B,0x2B},3);
++
++	// D900H - VCOM
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x00},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xD9,0x80,0xA8,0xA8,0xA8,0xA8},6); //Vcom=-0.32
++
++	// F58DH - 20150811 add for sleepin & RESX Vcom(SX) sequence error, no explanation in data sheet.
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x8D},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xF5,0x21},2);
++
++	//------------TCON setting-------------//
++	//C080H TCON RTN setting				//20160408
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x80},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xC0,0x00,0x89,0x06,0x38,0x00,0x83,0x00,0x83,0x06,0x06,0x01,0x66,0x01,0x66},15);
++
++	// C1A3H	TCON video vs shift			//20160406
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xa3},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xc1,0x02,0xA0},3);
++
++	//CE80H		TP mux4 mode				//20160217
++	//TP rescan1 enable
++	//TP rescan2 enable
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x80},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xce,0x93},2);
++
++	//CE83H		TP width				//20160408
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x83},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xce,0x55,0x00,0x3e},4);
++
++	//CE86H		TP rescan width				//20160217
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x86},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xce,0x00,0x83},3);
++
++	//CE88H		TP prescan width			//20160217
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x88},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xce,0x00,0x00},3);
++
++	//CE8AH		TP stop value				//20160220
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x8A},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xce,0x83,0xc0},3);
++
++	//CE90H		TP blanking setting			//20160406
++	//hi0=10-line, hi1=12-line
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x90},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xce,0xB8,0xBB,0xF8,0x0F,0xFF},6);
++
++	//C3F0H		TP LCD busy setting			//20160129
++	//term1 & mclk=0x02 start
++	//term3 & mclk=0x6a end
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xf0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xc3,0x01,0x00,0x02,0x10,0x00,0x6a},7);
++
++	//C3F0H		TP LCD swb setting			//20160129
++	//tpl1 & mclk=0x30 start
++	//tpl2 & mclk=0x02 end
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xf7},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xc3,0x02,0x00,0x30,0x08,0x00,0x02},7);
++
++	//CF80H		TP v0 setting				//20160413
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x80},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xcf,0x10,0x07,0x6c,0x00,0x03,0x07,0x6e,0x00,0x03},10);
++
++	//CF90H		TP v1 setting				//20160129
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x90},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xcf,0x10,0x03,0xc0,0x00,0x03,0x03,0xc2,0x00,0x03},10);
++
++	//CFA0H		TP v2 setting				//20160220
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xa0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xcf,0x10,0x02,0x80,0x00,0x03,0x02,0x82,0x00,0x03},10);
++
++	//CFB0H		TP v3 setting				//20160129
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xb0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xcf,0x10,0x01,0x40,0x00,0x03,0x01,0x42,0x00,0x03},10);
++
++	//CFC0H		TP vb setting				//20160129
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xc0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xcf,0x11,0x00,0x00,0x00,0x03,0x07,0x80,0x00,0x03},10);
++
++	//CFD0H		TP vf setting				//20160129
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xd0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xcf,0x10,0x07,0x6c,0x00,0x03,0x07,0x6e,0x00,0x03},10);
++
++	//CFE0H		SD sdpl setting				//20160129
++	//term1 & mclk=0x02 1st start
++	//tpl1 & mclk=0x31 1st end
++	//tpl2 & mclk-0x01 2st start
++	//term3 & mclk=0x6a 2st end
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xe0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xcf,0x01,0x00,0x02,0x02,0x00,0x31,0x08,0x00,0x01,0x10,0x00,0x6a},13);
++
++	//		LCD_Busy->TE				//20150203
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xE0},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xFF,0x00},2);
++	//	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xB0},2);
++	//	mipi_dsi_generic_write(dsi, (u8[]){0xF6,0x69,0x78,0x19},2);
++
++	//------------Cut1.0 add-------------//
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x00},2);				//00:TMC 02:FIFO
++	mipi_dsi_generic_write(dsi, (u8[]){0x1C,0x00},2);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x90},2);				//MIPI dly sel
++	mipi_dsi_generic_write(dsi, (u8[]){0xB0,0x03,0x03,0x01,0x01,0x00,0x00},7);
++
++	//	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xA1},2);				//CMD mode
++	//	mipi_dsi_generic_write(dsi, (u8[]){0xC1,0x00},2);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xC1},2);				//VDD & LVDSVDD	   20160408
++	mipi_dsi_generic_write(dsi, (u8[]){0xC5,0x00},2);
++
++	//-------------------20160216---------------------------
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x83},2);				//CKV EQ 20161107
++	mipi_dsi_generic_write(dsi, (u8[]){0xC3,0x22,0x22},3);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x88},2);				//CKH EQ 20161107
++	mipi_dsi_generic_write(dsi, (u8[]){0xC3,0x33,0x33},3);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x98},2);				//CKH EQ 20161107
++	mipi_dsi_generic_write(dsi, (u8[]){0xC3,0x33,0x33},3);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x80},2);				//FRC & Dgamma enable 20160312
++	mipi_dsi_generic_write(dsi, (u8[]){0xD7,0x04},2);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x80},2); 				// 20160220
++	mipi_dsi_generic_write(dsi, (u8[]){0xC4,0x11},2);
++
++	//-------------------20160312---------------------------
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xD0},2);				//SMP 20160312
++	mipi_dsi_generic_write(dsi, (u8[]){0xF4,0x2A,0x2A},3);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xF5},2);				//cap_ctrl 20160312
++	mipi_dsi_generic_write(dsi, (u8[]){0xF5,0x53},2);
++
++	//-------------------20160409---------------------------
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x93},2);				//Source clk dly 20160409
++	mipi_dsi_generic_write(dsi, (u8[]){0xC4,0x22},2);
++
++	//-------------------20160413---------------------------
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xF4},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xC2,0x83,0x02,0xD0},4);
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xF8},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xC2,0x80},2);
++
++	//-------------------20161104---------------------------
++	//Gamma & SDOP en
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xA7},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xF3,0x03},2);
++
++	//ESD
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xA6},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xF3,0x01},2);
++
++	//-------------------20161221---------------------------
++	// F5D5H
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0xD5},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xF5,0x21},2);
++
++	//-------------------20161104---------------------------
++	//Gamma
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x00},2); //2.2+
++	mipi_dsi_generic_write(dsi, (u8[]){0xE1,0x0D,0x14,0x28,0x3B,0x45,0x53,0x65,0x73,0x78,0x81,0x88,0x8F,0x6B,0x67,0x66,0x62,0x56,0x4B,0x3C,0x33,0x2B,0x1E,0x18,0x17},25);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x00},2); //2.2-
++	mipi_dsi_generic_write(dsi, (u8[]){0xE2,0x0D,0x14,0x28,0x3B,0x45,0x53,0x65,0x73,0x78,0x81,0x88,0x8F,0x6B,0x67,0x66,0x62,0x56,0x4B,0x3C,0x33,0x2B,0x1E,0x0A,0x09},25);
++
++	//CMD2 DISABLE
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x00},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xff,0x00,0x00,0x00},4);
++	mipi_dsi_generic_write(dsi, (u8[]){0x00,0x80},2);
++	mipi_dsi_generic_write(dsi, (u8[]){0xff,0x00,0x00},3);
++
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x11},1);
++	usleep_range(10000, 20000);
++
++	mipi_dsi_generic_write(dsi, (u8[]){0x29},1);
++	mipi_dsi_generic_write(dsi, (u8[]){0x35},1); //TE
++
++
++
++
++
++	ret = mipi_dsi_dcs_set_pixel_format(dsi, MIPI_DCS_PIXEL_FMT_24BIT << 4);
++	if (ret < 0) {
++		dev_err(dev, "failed to set pixel format: %d\n", ret);
++		return ret;
++	}
++
++	ret = mipi_dsi_dcs_set_column_address(dsi, 0, dxq->mode->hdisplay - 1);
++	if (ret < 0) {
++		dev_err(dev, "failed to set column address: %d\n", ret);
++		return ret;
++	}
++
++	ret = mipi_dsi_dcs_set_page_address(dsi, 0, dxq->mode->vdisplay - 1);
++	if (ret < 0) {
++		dev_err(dev, "failed to set page address: %d\n", ret);
++		return ret;
++	}
++
++	/*
++	 * BIT(5) BCTRL = 1 Backlight Control Block On, Brightness registers
++	 *                  are active
++	 * BIT(3) BL = 1    Backlight Control On
++	 * BIT(2) DD = 0    Display Dimming is Off
++	 */
++	ret = mipi_dsi_dcs_write(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY,
++				 (u8[]){ 0x24 }, 1);
++	if (ret < 0) {
++		dev_err(dev, "failed to write control display: %d\n", ret);
++		return ret;
++	}
++
++	/* CABC off */
++	ret = mipi_dsi_dcs_write(dsi, MIPI_DCS_WRITE_POWER_SAVE,
++				 (u8[]){ 0x00 }, 1);
++	if (ret < 0) {
++		dev_err(dev, "failed to set cabc off: %d\n", ret);
++		return ret;
++	}
++
++	ret = mipi_dsi_dcs_exit_sleep_mode(dsi);
++	if (ret < 0) {
++		dev_err(dev, "failed to set exit sleep mode: %d\n", ret);
++		return ret;
++	}
++
++	msleep(120);
++
++	ret = mipi_dsi_generic_write(dsi, (u8[]){0xB0, 0x00}, 2);
++	if (ret < 0) {
++		dev_err(dev, "failed to set mcap: %d\n", ret);
++		return ret;
++	}
++
++	mdelay(10);
++
++	/* Interface setting, video mode */
++	ret = mipi_dsi_generic_write(dsi, (u8[])
++				     {0xB3, 0x26, 0x08, 0x00, 0x20, 0x00}, 6);
++	if (ret < 0) {
++		dev_err(dev, "failed to set display interface setting: %d\n"
++			, ret);
++		return ret;
++	}
++
++	mdelay(20);
++
++	ret = mipi_dsi_generic_write(dsi, (u8[]){0xB0, 0x03}, 2);
++	if (ret < 0) {
++		dev_err(dev, "failed to set default values for mcap: %d\n"
++			, ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int dxq_panel_on(struct dxq_panel *dxq)
++{
++	struct mipi_dsi_device *dsi = dxq->dsi;
++	struct device *dev = &dxq->dsi->dev;
++	int ret;
++
++	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
++
++	ret = mipi_dsi_dcs_set_display_on(dsi);
++	if (ret < 0)
++		dev_err(dev, "failed to set display on: %d\n", ret);
++
++	return ret;
++}
++
++static void dxq_panel_off(struct dxq_panel *dxq)
++{
++	struct mipi_dsi_device *dsi = dxq->dsi;
++	struct device *dev = &dxq->dsi->dev;
++	int ret;
++
++	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
++
++	ret = mipi_dsi_dcs_set_display_off(dsi);
++	if (ret < 0)
++		dev_err(dev, "failed to set display off: %d\n", ret);
++
++	ret = mipi_dsi_dcs_enter_sleep_mode(dsi);
++	if (ret < 0)
++		dev_err(dev, "failed to enter sleep mode: %d\n", ret);
++
++	msleep(100);
++}
++
++static int dxq_panel_disable(struct drm_panel *panel)
++{
++	struct dxq_panel *dxq = to_dxq_panel(panel);
++
++	if (!dxq->enabled)
++		return 0;
++
++	backlight_disable(dxq->backlight);
++
++	dxq->enabled = false;
++
++	return 0;
++}
++
++static int dxq_panel_unprepare(struct drm_panel *panel)
++{
++	struct dxq_panel *dxq = to_dxq_panel(panel);
++	struct device *dev = &dxq->dsi->dev;
++	int ret;
++
++	if (!dxq->prepared)
++		return 0;
++
++	dxq_panel_off(dxq);
++
++	ret = regulator_bulk_disable(ARRAY_SIZE(dxq->supplies), dxq->supplies);
++	if (ret < 0)
++		dev_err(dev, "regulator disable failed, %d\n", ret);
++
++	gpiod_set_value_cansleep(dxq->enable_gpio, 0);
++
++	gpiod_set_value_cansleep(dxq->reset_gpio, 1);
++
++	gpiod_set_value_cansleep(dxq->dcdc_en_gpio, 0);
++
++	dxq->prepared = false;
++
++	return 0;
++}
++
++static int dxq_panel_prepare(struct drm_panel *panel)
++{
++	struct dxq_panel *dxq = to_dxq_panel(panel);
++	struct device *dev = &dxq->dsi->dev;
++	int ret;
++
++	if (dxq->prepared)
++		return 0;
++
++	ret = regulator_bulk_enable(ARRAY_SIZE(dxq->supplies), dxq->supplies);
++	if (ret < 0) {
++		dev_err(dev, "regulator enable failed, %d\n", ret);
++		return ret;
++	}
++
++	msleep(20);
++
++	gpiod_set_value_cansleep(dxq->dcdc_en_gpio, 1);
++	usleep_range(10, 20);
++
++	gpiod_set_value_cansleep(dxq->reset_gpio, 0);
++	usleep_range(10, 20);
++
++	gpiod_set_value_cansleep(dxq->enable_gpio, 1);
++	usleep_range(10, 20);
++
++	ret = dxq_panel_init(dxq);
++	if (ret < 0) {
++		dev_err(dev, "failed to init panel: %d\n", ret);
++		goto poweroff;
++	}
++
++	ret = dxq_panel_on(dxq);
++	if (ret < 0) {
++		dev_err(dev, "failed to set panel on: %d\n", ret);
++		goto poweroff;
++	}
++
++	dxq->prepared = true;
++
++	return 0;
++
++poweroff:
++	ret = regulator_bulk_disable(ARRAY_SIZE(dxq->supplies), dxq->supplies);
++	if (ret < 0)
++		dev_err(dev, "regulator disable failed, %d\n", ret);
++
++	gpiod_set_value_cansleep(dxq->enable_gpio, 0);
++
++	gpiod_set_value_cansleep(dxq->reset_gpio, 1);
++
++	gpiod_set_value_cansleep(dxq->dcdc_en_gpio, 0);
++
++	return ret;
++}
++
++static int dxq_panel_enable(struct drm_panel *panel)
++{
++	struct dxq_panel *dxq = to_dxq_panel(panel);
++
++	if (dxq->enabled)
++		return 0;
++
++	backlight_enable(dxq->backlight);
++
++	dxq->enabled = true;
++
++	return 0;
++}
++
++static const struct drm_display_mode default_mode = {
++		.clock = 140000,
++		.hdisplay = 1080,
++		.hsync_start = 1080 + 16,
++		.hsync_end = 1080 + 16 + 45,
++		.htotal = 1080 + 16 + 45 + 40,
++		.vdisplay = 1920,
++		.vsync_start = 1920 + 4,
++		.vsync_end = 1920 + 4 + 18,
++		.vtotal = 1920 + 4 + 18 + 18,
++		.flags = 0,
++};
++
++static int dxq_panel_get_modes(struct drm_panel *panel,
++			       struct drm_connector *connector)
++{
++	struct drm_display_mode *mode;
++	struct dxq_panel *dxq = to_dxq_panel(panel);
++	struct device *dev = &dxq->dsi->dev;
++
++	mode = drm_mode_duplicate(connector->dev, &default_mode);
++	if (!mode) {
++		dev_err(dev, "failed to add mode %ux%ux@%u\n",
++			default_mode.hdisplay, default_mode.vdisplay,
++			drm_mode_vrefresh(&default_mode));
++		return -ENOMEM;
++	}
++
++	drm_mode_set_name(mode);
++
++	drm_mode_probed_add(connector, mode);
++
++	connector->display_info.width_mm = 95;
++	connector->display_info.height_mm = 151;
++
++	return 1;
++}
++
++static int dsi_dcs_bl_get_brightness(struct backlight_device *bl)
++{
++	struct mipi_dsi_device *dsi = bl_get_data(bl);
++	int ret;
++	u16 brightness = bl->props.brightness;
++
++	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
++
++	ret = mipi_dsi_dcs_get_display_brightness(dsi, &brightness);
++	if (ret < 0)
++		return ret;
++
++	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
++
++	return brightness & 0xff;
++}
++
++static int dsi_dcs_bl_update_status(struct backlight_device *bl)
++{
++	struct mipi_dsi_device *dsi = bl_get_data(bl);
++	int ret;
++
++	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
++
++	ret = mipi_dsi_dcs_set_display_brightness(dsi, bl->props.brightness);
++	if (ret < 0)
++		return ret;
++
++	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
++
++	return 0;
++}
++
++static const struct backlight_ops dsi_bl_ops = {
++	.update_status = dsi_dcs_bl_update_status,
++	.get_brightness = dsi_dcs_bl_get_brightness,
++};
++
++static struct backlight_device *
++drm_panel_create_dsi_backlight(struct mipi_dsi_device *dsi)
++{
++	struct device *dev = &dsi->dev;
++	struct backlight_properties props;
++
++	memset(&props, 0, sizeof(props));
++	props.type = BACKLIGHT_RAW;
++	props.brightness = 255;
++	props.max_brightness = 255;
++
++	return devm_backlight_device_register(dev, dev_name(dev), dev, dsi,
++					      &dsi_bl_ops, &props);
++}
++
++static const struct drm_panel_funcs dxq_panel_funcs = {
++	.disable = dxq_panel_disable,
++	.unprepare = dxq_panel_unprepare,
++	.prepare = dxq_panel_prepare,
++	.enable = dxq_panel_enable,
++	.get_modes = dxq_panel_get_modes,
++};
++
++static const struct of_device_id dxq_of_match[] = {
++	{ .compatible = "dxq,dxq5d5024", },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, dxq_of_match);
++
++static int dxq_panel_add(struct dxq_panel *dxq)
++{
++	struct device *dev = &dxq->dsi->dev;
++	int ret;
++	unsigned int i;
++
++	dxq->mode = &default_mode;
++
++	for (i = 0; i < ARRAY_SIZE(dxq->supplies); i++)
++		dxq->supplies[i].supply = regulator_names[i];
++
++	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(dxq->supplies),
++				      dxq->supplies);
++	if (ret < 0)
++		return dev_err_probe(dev, ret,
++				     "failed to init regulator, ret=%d\n", ret);
++
++	dxq->enable_gpio = devm_gpiod_get(dev, "enable", GPIOD_OUT_LOW);
++	if (IS_ERR(dxq->enable_gpio)) {
++		return dev_err_probe(dev, PTR_ERR(dxq->enable_gpio),
++				     "cannot get enable-gpio %d\n", ret);
++	}
++
++	dxq->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(dxq->reset_gpio))
++		return dev_err_probe(dev, PTR_ERR(dxq->reset_gpio),
++				     "cannot get reset-gpios %d\n", ret);
++
++	dxq->dcdc_en_gpio = devm_gpiod_get(dev, "dcdc-en", GPIOD_OUT_LOW);
++	if (IS_ERR(dxq->dcdc_en_gpio))
++		return dev_err_probe(dev, PTR_ERR(dxq->dcdc_en_gpio),
++				     "cannot get dcdc-en-gpio %d\n", ret);
++
++	dxq->backlight = drm_panel_create_dsi_backlight(dxq->dsi);
++	if (IS_ERR(dxq->backlight))
++		return dev_err_probe(dev, PTR_ERR(dxq->backlight),
++				     "failed to register backlight %d\n", ret);
++
++	dxq->base.prepare_prev_first = true;
++	drm_panel_init(&dxq->base, &dxq->dsi->dev, &dxq_panel_funcs,
++		       DRM_MODE_CONNECTOR_DSI);
++
++	drm_panel_add(&dxq->base);
++
++	return 0;
++}
++
++static void dxq_panel_del(struct dxq_panel *dxq)
++{
++	if (dxq->base.dev)
++		drm_panel_remove(&dxq->base);
++}
++
++static int dxq_panel_probe(struct mipi_dsi_device *dsi)
++{
++	struct dxq_panel *dxq;
++	int ret;
++
++	dsi->lanes = 4;
++	dsi->format = MIPI_DSI_FMT_RGB888;
++	dsi->mode_flags =  MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_SYNC_PULSE |
++			MIPI_DSI_MODE_VIDEO_BURST;
++
++	dxq = devm_kzalloc(&dsi->dev, sizeof(*dxq), GFP_KERNEL);
++	if (!dxq)
++		return -ENOMEM;
++
++	mipi_dsi_set_drvdata(dsi, dxq);
++
++	dxq->dsi = dsi;
++
++	ret = dxq_panel_add(dxq);
++	if (ret < 0)
++		return ret;
++
++	ret = mipi_dsi_attach(dsi);
++	if (ret < 0) {
++		dxq_panel_del(dxq);
++		return ret;
++	}
++
++	return 0;
++}
++
++static void dxq_panel_remove(struct mipi_dsi_device *dsi)
++{
++	struct dxq_panel *dxq = mipi_dsi_get_drvdata(dsi);
++	int ret;
++
++	ret = dxq_panel_disable(&dxq->base);
++	if (ret < 0)
++		dev_err(&dsi->dev, "failed to disable panel: %d\n", ret);
++
++	ret = mipi_dsi_detach(dsi);
++	if (ret < 0)
++		dev_err(&dsi->dev, "failed to detach from DSI host: %d\n",
++			ret);
++
++	dxq_panel_del(dxq);
++}
++
++static void dxq_panel_shutdown(struct mipi_dsi_device *dsi)
++{
++	struct dxq_panel *dxq = mipi_dsi_get_drvdata(dsi);
++
++	dxq_panel_disable(&dxq->base);
++}
++
++static struct mipi_dsi_driver dxq_panel_driver = {
++	.driver = {
++		.name = "panel-dxq5d5024",
++		.of_match_table = dxq_of_match,
++	},
++	.probe = dxq_panel_probe,
++	.remove = dxq_panel_remove,
++	.shutdown = dxq_panel_shutdown,
++};
++module_mipi_dsi_driver(dxq_panel_driver);
++
++MODULE_AUTHOR("Markus Marks <markus_marks@web.de>");
++MODULE_DESCRIPTION("DXQ5D5024");
++MODULE_LICENSE("GPL v2");

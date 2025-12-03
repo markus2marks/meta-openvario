@@ -31,8 +31,12 @@ SRC_URI = " \
     file://flyberry.cfg \
     file://flyberry-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
     file://dxq5d5024.patch \
+    file://lvds.patch \
     file://vc4-kms-dsi-dxq5d5024-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
     file://rauc.cfg \
+    file://lvds_bridge.cfg \
+    file://ov-rpi4-57-lvds-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
+    file://ov-rpi4-7-lvds-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
     "
 
 SRC_URI:append:raspberrypi4 = " \
