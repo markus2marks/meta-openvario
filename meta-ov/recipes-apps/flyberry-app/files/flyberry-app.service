@@ -1,0 +1,17 @@
+[Unit]
+Description=Flyberry App (Wayland)
+After=weston.service
+Wants=weston.service
+
+[Service]
+User=root
+Group=root
+Environment=QT_QPA_PLATFORM=wayland-egl
+ExecStart=/usr/bin/FlyberryApp
+Restart=always
+RestartSec=1
+WorkingDirectory=/root
+
+[Install]
+WantedBy=graphical.target
+

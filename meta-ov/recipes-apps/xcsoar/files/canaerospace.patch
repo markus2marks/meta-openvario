@@ -1,0 +1,2110 @@
+diff --git a/build/driver.mk b/build/driver.mk
+index 93cf9fc822..d4d85603d7 100644
+--- a/build/driver.mk
++++ b/build/driver.mk
+@@ -98,6 +98,9 @@ THERMALEXPRESS_SOURCES = \
+ STRATUX_SOURCES = \
+ 	$(DRIVER_SRC_DIR)/Stratux/Driver.cpp
+ 
++CANAEROSPACE_SOURCES = \
++    $(DRIVER_SRC_DIR)/CANaerospace/marshal.c
++
+ DRIVER_SOURCES = \
+ 	$(SRC)/Device/Driver.cpp \
+ 	$(SRC)/Device/Register.cpp \
+@@ -140,7 +143,10 @@ DRIVER_SOURCES = \
+ 	$(DRIVER_SRC_DIR)/AirControlDisplay.cpp \
+ 	$(DRIVER_SRC_DIR)/Larus.cpp \
+ 	$(DRIVER_SRC_DIR)/ATR833/Device.cpp \
+-	$(DRIVER_SRC_DIR)/ATR833/Register.cpp
++	$(DRIVER_SRC_DIR)/ATR833/Register.cpp \
++	$(DRIVER_SRC_DIR)/CANaerospace.cpp \
++	$(DRIVER_SRC_DIR)/FLARM/flarmPropagated.c \
++	$(CANAEROSPACE_SOURCES)
+ 
+ DRIVER_DEPENDS = TIME LIBNMEA GEO OPERATION UNITS FMT PROFILE FLARM
+ 
+diff --git a/build/libport.mk b/build/libport.mk
+index 979889c203..5cff399979 100644
+--- a/build/libport.mk
++++ b/build/libport.mk
+@@ -18,6 +18,10 @@ else
+ PORT_SOURCES += $(SRC)/Device/Port/SerialPort.cpp
+ endif
+ 
++PORT_SOURCES += \
++	$(SRC)/Device/Port/CANPort.cpp
++
++
+ PORT_SOURCES += $(SRC)/Device/Port/TCPClientPort.cpp
+ 
+ PORT_DEPENDS = FMT
+diff --git a/src/Device/Config.cpp b/src/Device/Config.cpp
+index 2ab618df02..77094a9e3e 100644
+--- a/src/Device/Config.cpp
++++ b/src/Device/Config.cpp
+@@ -54,6 +54,9 @@ DeviceConfig::IsAvailable() const noexcept
+   case PortType::UDP_LISTENER:
+     return true;
+ 
++  case PortType::CAN_INTERFACE:
++    return true;
++
+   case PortType::PTY:
+ #if defined(HAVE_POSIX) && !defined(ANDROID)
+     return true;
+@@ -98,6 +101,7 @@ DeviceConfig::ShouldReopenOnTimeout() const noexcept
+ 
+   case PortType::TCP_LISTENER:
+   case PortType::UDP_LISTENER:
++  case PortType::CAN_INTERFACE:
+     /* this is a server, and if no data gets received, this can just
+        mean that nobody connected to it, but reopening it periodically
+        doesn't help */
+@@ -287,6 +291,10 @@ DeviceConfig::GetPortName(TCHAR *buffer, size_t max_size) const noexcept
+     StringFormat(buffer, max_size, _T("UDP port %d"), tcp_port);
+     return buffer;
+ 
++  case PortType::CAN_INTERFACE:
++    StringFormat(buffer, max_size, _T("CAN port %s"), can_interface.c_str());
++    return buffer;
++
+   case PortType::PTY:
+     StringFormat(buffer, max_size, _T("Pseudo-terminal %s"), path.c_str());
+     return buffer;
+diff --git a/src/Device/Config.hpp b/src/Device/Config.hpp
+index ce1e758174..b23de00625 100644
+--- a/src/Device/Config.hpp
++++ b/src/Device/Config.hpp
+@@ -98,6 +98,11 @@ struct DeviceConfig {
+      */
+     GLIDER_LINK,
+ 
++    /**
++     * CAN interface, i.e. canx / vcanx
++     */
++    CAN_INTERFACE,
++
+     /**
+      * USB serial port on Android.
+      */
+@@ -138,7 +143,7 @@ struct DeviceConfig {
+    */
+   StaticString<32> bluetooth_mac;
+ 
+-  /**
++  /**INTERFACE
+    * The IOIO UART ID.
+    */
+   unsigned ioio_uart_id;
+@@ -229,6 +234,11 @@ struct DeviceConfig {
+    */
+   unsigned tcp_port;
+ 
++  /*
++   * The CAN port name like "can0" or "vcan0" for a virtual port.
++   */
++  StaticString<6> can_interface;
++
+   /**
+    * Is this device currently enabled?  This flag can be used to
+    * maintain a stock of devices, and not all of them are enabled at a
+@@ -315,6 +325,7 @@ struct DeviceConfig {
+     case PortType::PTY:
+     case PortType::UDP_LISTENER:
+     case PortType::ANDROID_USB_SERIAL:
++    case PortType::CAN_INTERFACE:
+       break;
+     }
+ 
+@@ -370,6 +381,7 @@ struct DeviceConfig {
+     case PortType::PTY:
+     case PortType::UDP_LISTENER:
+     case PortType::ANDROID_USB_SERIAL:
++    case PortType::CAN_INTERFACE:
+       return true;
+     }
+ 
+@@ -405,6 +417,17 @@ struct DeviceConfig {
+     return UsesTCPPort(port_type);
+   }
+ 
++  /**
++   * Does this port type use a can port?
++   */
++  static bool UsesCANPort(PortType port_type) noexcept {
++    return port_type == PortType::CAN_INTERFACE;
++  }
++
++  bool UsesCANPort() const noexcept {
++    return UsesCANPort(port_type);
++  }
++
+   constexpr bool IsDriver(const TCHAR *name) const noexcept {
+     return UsesDriver() && driver_name.equals(name);
+   }
+diff --git a/src/Device/Driver/CANaerospace.cpp b/src/Device/Driver/CANaerospace.cpp
+new file mode 100644
+index 0000000000..764fbf53ab
+--- /dev/null
++++ b/src/Device/Driver/CANaerospace.cpp
+@@ -0,0 +1,395 @@
++/*
++Copyright_License {
++
++  XCSoar Glide Computer - http://www.xcsoar.org/
++  Copyright (C) 2000-2016 The XCSoar Project
++  A detailed list of copyright holders can be found in the file "AUTHORS".
++
++  This program is free software; you can redistribute it and/or
++  modify it under the terms of the GNU General Public License
++  as published by the Free Software Foundation; either version 2
++  of the License, or (at your option) any later version.
++
++  This program is distributed in the hope that it will be useful,
++  but WITHOUT ANY WARRANTY; without even the implied warranty of
++  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++  GNU General Public License for more details.
++
++  You should have received a copy of the GNU General Public License
++  along with this program; if not, write to the Free Software
++  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++}
++*/
++
++#include "Device/Driver/CANaerospace.hpp"
++#include "Device/Driver.hpp"
++#include "NMEA/Info.hpp"
++
++#include <linux/can.h>
++
++#include <iostream> // TODO: Remove this, its just for debugging
++#include <iomanip> // TODO: Remove this, its just for debugging
++#include <Device/Driver/CANaerospace/marshal.h>
++#include <map>
++#include <time/RoughTime.hpp>
++#include <time/LocalTime.hpp>
++#include <Device/Port/CANPort.hpp>
++#include <Device/Driver/FLARM/flarmPropagated.hpp>
++#include <Geo/Gravity.hpp>
++
++class CANaerospaceDevice final : public AbstractDevice {
++//  Port &port;
++
++public:
++    CANaerospaceDevice([[maybe_unused]]Port &_port) {
++    }
++
++    virtual bool DataReceived(std::span<const std::byte> s,
++                              struct NMEAInfo &info) noexcept override;
++};
++
++std::map<int, double> canId2clock;
++auto last_fix = GeoPoint::Invalid();
++SpeedVector last_wind = SpeedVector::Zero();
++static FlarmState flarmState;
++static FlarmMostImportantObjectData objectData;
++static FlarmObjectData flarmObjectData;
++
++static Device *
++CANaerospaceCreateOnPort([[maybe_unused]] const DeviceConfig &config, Port &com_port) {
++    return new CANaerospaceDevice(com_port);
++}
++
++bool
++CANaerospaceDevice::DataReceived(std::span<const std::byte> s,
++                         struct NMEAInfo &info) noexcept {
++    assert(!s.empty());
++
++    const can_frame *canFrame = reinterpret_cast<const can_frame *>(s.data());
++    const auto *canData = canFrame->data + 4;
++    const CanasMessage *cm = (const CanasMessage *) canFrame->data;
++
++    static CanasMessage canasMessage;
++    canasMessage.message_code = cm->message_code;
++    canasMessage.service_code = cm->service_code;
++
++    static double qnh_corr = 0.0;
++    static double last_body_long_acc = 0.0;
++    static double last_body_lat_acc = 0.0;
++    static double last_body_norm_acc = 0.0;
++    static double last_body_pitch_angle = 0.0;
++    static double last_body_roll_angle = 0.0;
++
++    info.alive.Update(info.clock);
++
++    switch (canFrame->can_id) {
++        case GPS_AIRCRAFT_LATITUDE:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_LONG) > 0) {
++                last_fix.latitude = Angle::Degrees(canasMessage.data.container.LONG / 1E7);
++            }
++            break;
++
++        case GPS_AIRCRAFT_LONGITUDE:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_LONG) > 0) {
++                last_fix.longitude = Angle::Degrees(canasMessage.data.container.LONG / 1E7);
++                if (last_fix.Check()) {
++                    info.location = last_fix;
++                    info.location_available.Update(info.clock);
++                    return true;
++                }
++            }
++            break;
++
++        case GPS_AIRCRAFT_HEIGHTABOVE_ELLIPSOID:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                info.gps_altitude = canasMessage.data.container.FLOAT;
++                info.gps_altitude_available.Update(info.clock);
++                return true;
++            }
++            break;
++
++        case UTC:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_CHAR4) > 0) {
++                info.date_time_utc.hour = canasMessage.data.container.CHAR4[0];
++                info.date_time_utc.minute = canasMessage.data.container.CHAR4[1];
++                info.date_time_utc.second = canasMessage.data.container.CHAR4[2];
++                info.time = TimeStamp{info.date_time_utc.DurationSinceMidnight()};
++                info.time_available.Update(info.clock);
++                return true;
++            }
++            break;
++
++        case HEADING_ANGLE:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                float value = canasMessage.data.container.FLOAT;
++                if (value < 0.0) {
++                    value += 360.0;
++                }
++                info.attitude.heading = Angle::Degrees(value);
++                info.attitude.heading_available.Update(info.clock);
++                return true;
++            }
++            break;
++
++        case GPS_TRUE_TRACK:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                info.track = Angle::Degrees(canasMessage.data.container.FLOAT);
++                info.track_available.Update(info.clock);
++                return true;
++            }
++            break;
++
++        case INDICATED_AIRSPEED:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                info.ProvideIndicatedAirspeed(canasMessage.data.container.FLOAT);
++                return true;
++            }
++            break;
++
++        case TRUE_AIRSPEED:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                info.ProvideTrueAirspeed(canasMessage.data.container.FLOAT);
++                return true;
++            }
++            break;
++
++        case GPS_GROUND_SPEED:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                info.ground_speed = canasMessage.data.container.FLOAT;
++                info.ground_speed_available.Update(info.clock);
++                return true;
++            }
++            break;
++
++        case AIRMASS_SPEED_VERTICAL:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                info.ProvideTotalEnergyVario(-canasMessage.data.container.FLOAT);
++                return true;
++            }
++            break;
++
++        case STATIC_PRESSURE: // todo -- verify!
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                info.ProvideStaticPressure(AtmosphericPressure::Pascal(canasMessage.data.container.FLOAT));
++                //std::cout << "STATIC_PRESSURE [Pascal]=" << info.static_pressure.GetPascal() << std::endl;
++                return true;
++            }
++            break;
++
++        case STANDARD_ALTITUDE: // todo -- verify!
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                info.ProvideBaroAltitudeTrue(canasMessage.data.container.FLOAT + qnh_corr);
++                //std::cout << "QNH_CORR [m]=" << qnh_corr << std::endl;
++                // std::cout << "STANDARD_ALTITUDE [m]=" << info.baro_altitude << std::endl;
++                return true;
++            }
++            break;
++
++        case BARO_CORRECTION_ID: /* QNH */
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                info.settings.ProvideQNH(AtmosphericPressure::Pascal(canasMessage.data.container.FLOAT), info.clock);
++                //std::cout << "BARO_CORRECTION_ID QNH-1 [Hp]=" << info.settings.qnh.GetHectoPascal() << std::endl;
++                info.settings.qnh_available.Update(info.clock);
++                return true;
++            }
++            break;
++
++        case BARO_ALT_CORR_ID:  // todo -- verify
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                switch (canasMessage.service_code & 0x0f) {
++                case 0: /* QNH */
++                   qnh_corr = canasMessage.data.container.FLOAT;
++                   //std::cout << "BARO_ALT_CORR_ID QNH [m]=" << qnh_corr << std::endl;
++                   return true;
++
++                case 1: /* QFE */
++                   //std::cout << "BARO_ALT_CORR_ID QFE [m]=" << canasMessage.data.container.FLOAT << std::endl;
++                  return true;
++
++                default:
++                   break;
++                }
++            }
++            break;
++
++        case BODY_LAT_ACC_ID:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                last_body_lat_acc = canasMessage.data.container.FLOAT;
++                info.acceleration.ProvideGLoad(SpaceDiagonal(last_body_lat_acc, last_body_long_acc, last_body_norm_acc) / GRAVITY);
++                return true;
++            }
++            break;
++
++        case BODY_LONG_ACC_ID:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                last_body_long_acc = canasMessage.data.container.FLOAT;
++                info.acceleration.ProvideGLoad(SpaceDiagonal(last_body_lat_acc, last_body_long_acc, last_body_norm_acc) / GRAVITY);
++                return true;
++            }
++            break;
++
++        case BODY_NORM_ACC_ID:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                last_body_norm_acc = canasMessage.data.container.FLOAT;
++                info.acceleration.ProvideGLoad(SpaceDiagonal(last_body_lat_acc, last_body_long_acc, last_body_norm_acc) / GRAVITY);
++                return true;
++            }
++            break;
++
++        case BODY_PITCH_ANGLE:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                last_body_pitch_angle = canasMessage.data.container.FLOAT;
++                info.attitude.pitch_angle_available.Update(info.clock);
++                info.attitude.pitch_angle = Angle::Degrees(last_body_pitch_angle);
++                return true;
++            }
++            break;
++
++        case BODY_ROLL_ANGLE:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                last_body_roll_angle = canasMessage.data.container.FLOAT;
++                info.attitude.bank_angle_available.Update(info.clock);
++                info.attitude.bank_angle = Angle::Degrees(last_body_roll_angle);
++                return true;
++            }
++            break;
++
++        case WIND_SPEED_ID:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                last_wind.norm = canasMessage.data.container.FLOAT;
++                info.ProvideExternalWind(last_wind.Reciprocal());
++                return true;
++            }
++            break;
++
++        case WIND_DIRECTION_ID:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                last_wind.bearing = Angle::Degrees(canasMessage.data.container.FLOAT);
++                info.ProvideExternalWind(last_wind.Reciprocal());
++                return true;
++            }
++            break;
++
++        case FLARM_STATE_ID:  // Flarm messages: PFLAU
++            // PFLAU,<RX>,<TX>,<GPS>,<Power>,<AlarmLevel>,<RelativeBearing>,<AlarmType>, <RelativeVertical>,<RelativeDistance>
++            switch (canasMessage.service_code) {
++                case 2:
++                    if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_USHORT2) == 0) return false;
++                       break;
++                case 3:
++                    if (canasNetworkToHost(&canasMessage.data, canData, 2, CANAS_DATATYPE_SHORT) == 0) return false;
++                       break;
++                default:
++                    if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_UCHAR4) == 0) return false;
++              }
++            if (canasFlarmStatePropagated(&canasMessage, info.gps_altitude, &objectData, &flarmState)) {
++                info.flarm.status.available.Update(info.clock);
++                info.flarm.status.rx = flarmState.RxDevicesCount;
++                info.flarm.status.tx = flarmState.TxState;
++                info.flarm.status.gps = (FlarmStatus::GPSStatus) flarmState.GpsState;
++                info.flarm.status.alarm_level = (FlarmTraffic::AlarmType) objectData.AlarmLevel; // TODO -- correct ???
++                return true;
++            }
++            break;
++
++        case FLARM_OBJECT_AL3_ID: // Flarm messages: PFLAA
++        case FLARM_OBJECT_AL2_ID:
++        case FLARM_OBJECT_AL1_ID:
++        case FLARM_OBJECT_AL0_ID:
++            // PFLAA,<AlarmLevel>,<RelativeNorth>,<RelativeEast>,<RelativeVertical>,<ID-Type>,<ID>,<Track>,<TurnRate>,<GroundSpeed>,<ClimbRate>,<Type>
++            switch (canasMessage.service_code & 0x0f) {
++                case 0:
++                case 1:
++                    if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_USHORT2) == 0) return false;
++                    break;
++                default:
++                    if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_UCHAR4) == 0) return false;
++            }
++            if (canasFlarmObjectPropagated(&canasMessage, canFrame->can_id, &flarmObjectData)) {
++                info.flarm.traffic.modified.Update(info.clock);
++                FlarmTraffic traffic{};
++                traffic.alarm_level = (FlarmTraffic::AlarmType) flarmObjectData.AlarmLevel; // TODO --verify
++                traffic.relative_north = flarmObjectData.RelNorth;
++                traffic.relative_east = flarmObjectData.RelEast;
++                traffic.relative_altitude = RoughAltitude(flarmObjectData.RelVertical);
++                traffic.distance = RoughDistance(flarmObjectData.RelHorizontal);
++//                traffic.id.Set(flarmObjectData.ID);
++                //traffic.IdType = flarmObjectData.IdType; // todo -- does not exist yes !!
++                traffic.track_received = flarmObjectData.valid.track;
++                traffic.track = RoughAngle(Angle::Degrees(flarmObjectData.Track));
++                traffic.turn_rate_received = flarmObjectData.valid.turnRate;
++                traffic.turn_rate = flarmObjectData.TurnRate;
++                traffic.speed_received = flarmObjectData.valid.groundSpeed;
++                traffic.speed = RoughSpeed(flarmObjectData.GroundSpeed);
++                traffic.climb_rate_received = flarmObjectData.valid.climbRate;
++                if (!traffic.climb_rate_received) {
++                    // Field is empty in stealth mode
++                    //stealth = true;
++                    traffic.climb_rate = 0.0;
++                } else {
++                    traffic.climb_rate = flarmObjectData.valid.climbRate / 100.0;
++                }
++
++                traffic.stealth = false;
++                if (flarmObjectData.Type > 15 || flarmObjectData.Type == 14) {
++                    traffic.type = FlarmTraffic::AircraftType::UNKNOWN;
++                } else {
++                    traffic.type = (FlarmTraffic::AircraftType) flarmObjectData.Type;
++                }
++
++                FlarmTraffic *flarm_slot = info.flarm.traffic.FindTraffic(traffic.id);
++                if (flarm_slot == nullptr) {
++                    flarm_slot = info.flarm.traffic.AllocateTraffic();
++                    if (flarm_slot == nullptr) {
++                        // no more slots available
++                        return false;
++                    }
++                    flarm_slot->Clear();
++                    flarm_slot->id = traffic.id;
++                    info.flarm.traffic.new_traffic.Update(info.clock);
++                }
++                // set time of fix to current time
++                flarm_slot->valid.Update(info.clock);
++                flarm_slot->Update(traffic);
++                assert(traffic.id.IsDefined());
++                return true;
++            }
++            break;
++
++        case MCCRADY_VALUE_ID:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                info.settings.ProvideMacCready(canasMessage.data.container.FLOAT, info.clock);
++                return true;
++            }
++        break;
++
++        case VARIO_MODE_ID: // todo -- check if datatype is correct
++            if (canasNetworkToHost(&canasMessage.data, canData, 2, CANAS_DATATYPE_SHORT) > 0) {
++                /* NOTE: works only if the Glide Computer has Flap force cruise ON  */
++                info.switch_state.flight_mode = (canasMessage.data.container.SHORT == 0)
++                                              ? SwitchState::FlightMode::CIRCLING : SwitchState::FlightMode::CRUISE;
++                return true;
++            }
++        break;
++
++        case OUTSIDE_AIR_TEMP_ID:
++            if (canasNetworkToHost(&canasMessage.data, canData, 4, CANAS_DATATYPE_FLOAT) > 0) {
++                info.temperature_available = true;
++                info.temperature = Temperature::FromKelvin(canasMessage.data.container.FLOAT);
++                return true;
++            }
++        break;
++
++        default:
++            // std::cout << "not implemented can_id: " << canFrame->can_id << std::endl;
++            break;
++      }
++    return false;
++}
++
++const struct DeviceRegister can_aerospace_driver = {
++        _T("CANaerospace"),
++        _T("CANaerospace"),
++        DeviceRegister::NO_TIMEOUT | DeviceRegister::RAW_GPS_DATA, // TODO: Put the right flags
++        CANaerospaceCreateOnPort,
++};
+diff --git a/src/Device/Driver/CANaerospace.hpp b/src/Device/Driver/CANaerospace.hpp
+new file mode 100644
+index 0000000000..9b5bd01e06
+--- /dev/null
++++ b/src/Device/Driver/CANaerospace.hpp
+@@ -0,0 +1,32 @@
++/*
++Copyright_License {
++
++  XCSoar Glide Computer - http://www.xcsoar.org/
++  Copyright (C) 2000-2016 The XCSoar Project
++  A detailed list of copyright holders can be found in the file "AUTHORS".
++
++  This program is free software; you can redistribute it and/or
++  modify it under the terms of the GNU General Public License
++  as published by the Free Software Foundation; either version 2
++  of the License, or (at your option) any later version.
++
++  This program is distributed in the hope that it will be useful,
++  but WITHOUT ANY WARRANTY; without even the implied warranty of
++  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++  GNU General Public License for more details.
++
++  You should have received a copy of the GNU General Public License
++  along with this program; if not, write to the Free Software
++  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++}
++*/
++
++#include "LogFile.hpp"
++#include "system/Error.hxx"
++
++#ifndef XCSOAR_DEVICE_DRIVER_CANAEROSPACE_HPP
++#define XCSOAR_DEVICE_DRIVER_CANAEROSPACE_HPP
++
++extern const struct DeviceRegister can_aerospace_driver;
++
++#endif
+diff --git a/src/Device/Driver/CANaerospace/FlarmMessage.h b/src/Device/Driver/CANaerospace/FlarmMessage.h
+new file mode 100644
+index 0000000000..267dd7c58e
+--- /dev/null
++++ b/src/Device/Driver/CANaerospace/FlarmMessage.h
+@@ -0,0 +1,53 @@
++//
++// Created by andreas on 01.05.20.
++//
++
++#ifndef XCSOAR2_FLARMMESSAGE_H
++#define XCSOAR2_FLARMMESSAGE_H
++
++typedef struct {
++    unsigned flarmId;
++    int16_t GpsAltitude;
++    uint8_t RxDevicesCount;
++    uint8_t TxState;
++    uint8_t GpsState;
++    uint8_t PowerState;
++    uint8_t State;
++    uint8_t ErrorCode;
++} FlarmState;
++
++typedef struct {
++    int8_t AlarmLevel;
++    int8_t AlarmType;
++    int8_t TargetVectorValid: 1;
++    int16_t RelVertical;
++    int16_t RelHorizontal;
++    int16_t RelBearing;
++    uint32_t ID;
++} FlarmMostImportantObjectData;
++
++struct FlarmObjectData {
++    int8_t AlarmLevel;
++    int8_t newAlarmLevel;
++    int8_t IdType;
++    int8_t MessageAckLevel;
++    uint8_t Type;
++    int16_t RelNorth;
++    int16_t RelEast;
++    int16_t RelVertical;
++    int16_t RelHorizontal;
++    uint32_t ID;
++    int16_t Track;
++    int8_t TurnRate;
++    int8_t GroundSpeed;
++    int8_t ClimbRate;      // in cm/s!!!!!!!!!
++    int8_t TimeOutCnt;
++    struct {
++        unsigned track: 1;
++        unsigned turnRate: 1;
++        unsigned groundSpeed: 1;
++        unsigned climbRate: 1;
++    } valid;
++};
++
++#endif //XCSOAR2_FLARMMESSAGE_H
+diff --git a/src/Device/Driver/CANaerospace/canaerospace/canaerospace.h b/src/Device/Driver/CANaerospace/canaerospace/canaerospace.h
+new file mode 100644
+index 0000000000..41ece84b32
+--- /dev/null
++++ b/src/Device/Driver/CANaerospace/canaerospace/canaerospace.h
+@@ -0,0 +1,341 @@
++/*
++ * CANaerospace main header
++ * Pavel Kirienko, 2013 (pavel.kirienko@gmail.com)
++ */
++
++#ifndef CANAEROSPACE_H_
++#define CANAEROSPACE_H_
++
++#include <stdint.h>
++#include "driver.h"
++#include "message.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * Broadcast Node ID can be used to perform network-wide service requests
++ */
++static const int CANAS_BROADCAST_NODE_ID = 0;
++
++/**
++ * Maximum number of nodes per one network
++ */
++static const int CANAS_MAX_NODES = 255;
++
++/**
++ * This library can work with the number of redundant interfaces not higher than this.
++ */
++static const int CANAS_IFACE_COUNT_MAX = 8;
++
++/**
++ * Buffer size required for functions like canasDump*()
++ */
++#define CANAS_DUMP_BUF_LEN 50
++
++/**
++ * Nearly all API calls return an error code.
++ * @note API calls return the negative error codes. You have to invert the sign to get the actual error code.
++ */
++typedef enum
++{
++    CANAS_ERR_OK = 0,
++
++    CANAS_ERR_ARGUMENT,
++    CANAS_ERR_NOT_ENOUGH_MEMORY,
++
++    CANAS_ERR_DRIVER,
++
++    CANAS_ERR_NO_SUCH_ENTRY,
++    CANAS_ERR_ENTRY_EXISTS,
++
++    CANAS_ERR_BAD_DATA_TYPE,
++    CANAS_ERR_BAD_MESSAGE_ID,
++    CANAS_ERR_BAD_NODE_ID,
++    CANAS_ERR_BAD_REDUND_CHAN,
++    CANAS_ERR_BAD_SERVICE_CHAN,
++    CANAS_ERR_BAD_CAN_FRAME,
++
++    CANAS_ERR_QUOTA_EXCEEDED,
++    CANAS_ERR_LOGIC                 ///< May be returned by a service if it goes wrong
++} CanasErrorCode;
++
++typedef struct CanasInstanceStruct CanasInstance;
++
++/**
++ * Send a message to the bus.
++ * @param [in] pi    Instance pointer
++ * @param [in] iface Interface index
++ * @param [in] pmsg  Pointer to the message to be sent
++ * @return           Number of messages sent (0 or 1), negative on failure
++ */
++typedef int (*CanasCanSendFn)(CanasInstance*, int, const CanasCanFrame*);
++
++/**
++ * Configure acceptance filters.
++ * @param [in] pi       Instance pointer
++ * @param [in] iface    Interface index
++ * @param [in] pfilters Pointer to an array of filter configs
++ * @param [in] len      Length of the config array
++ * @return              0 if ok, negative on failure
++ */
++typedef int (*CanasCanFilterFn)(CanasInstance*, int, const CanasCanFilterConfig*, int);
++
++/**
++ * Allocates a chunk of memory.
++ * If the application does not require de-initialization features like unsubscription of unadvertisement, then dynamic
++ * memory is not needed at all. If this is the case, you can use a static pool allocator.
++ * This feature is useful for embedded systems where dynamic memory is not always available.
++ * @note Allocated memory must be aligned properly.
++ * @param [in] pi   Instance pointer
++ * @param [in] size Size of the memory block required
++ * @return          Pointer or NULL if no memory available
++ */
++typedef void* (*CanasMallocFn)(CanasInstance*, int);
++
++/**
++ * Deallocates memory. This function is not required in most cases, see @ref CanasMallocFn for details.
++ * If the deallocation is not needed (e.g. in case of static allocator), then pointer to this function should be NULL.
++ * @param [in] pi  Instance pointer
++ * @param [in] ptr Pointer to the memory to be deallocated
++ */
++typedef void (*CanasFreeFn)(CanasInstance*, void*);
++
++/**
++ * Returns current timestamp in microseconds.
++ * Any base value (uptime or UNIX time) will do.
++ * @param [in] pi Instance pointer
++ * @return        Current timestamp in microseconds
++ */
++typedef uint64_t (*CanasTimestampFn)(CanasInstance*);
++
++typedef struct
++{
++    uint64_t timestamp_usec;
++    CanasMessage message;
++    uint16_t message_id;
++    uint8_t redund_channel_id;
++    uint8_t iface;
++} CanasHookCallbackArgs;
++typedef void (*CanasHookCallbackFn)(CanasInstance*, CanasHookCallbackArgs*);
++
++typedef struct
++{
++    uint64_t timestamp_usec;
++    void* parg;
++    CanasMessage message;
++    uint16_t message_id;
++    uint8_t redund_channel_id;
++} CanasParamCallbackArgs;
++typedef void (*CanasParamCallbackFn)(CanasInstance*, CanasParamCallbackArgs*);
++
++typedef struct
++{
++    uint64_t timestamp_usec;
++    void* pstate;
++} CanasServicePollCallbackArgs;
++typedef void (*CanasServicePollCallbackFn)(CanasInstance*, CanasServicePollCallbackArgs*);
++
++typedef struct
++{
++    uint64_t timestamp_usec;
++    void* pstate;
++    CanasMessage message;
++    uint8_t service_channel;
++} CanasServiceRequestCallbackArgs;
++typedef void (*CanasServiceRequestCallbackFn)(CanasInstance*, CanasServiceRequestCallbackArgs*);
++
++typedef struct
++{
++    uint64_t timestamp_usec;
++    void* pstate;
++    CanasMessage message;
++} CanasServiceResponseCallbackArgs;
++typedef void (*CanasServiceResponseCallbackFn)(CanasInstance*, CanasServiceResponseCallbackArgs*);
++
++typedef struct
++{
++    uint64_t timestamp_usec;        ///< Empty entry contains zero timestamp
++    uint32_t header;                ///< First 4 bytes of frame
++    uint8_t ifaces_mask;
++} CanasServiceFrameHistoryEntry;
++
++typedef struct
++{
++    void* pnext;                    ///< Must be the first entry
++    CanasServicePollCallbackFn callback_poll;
++    CanasServiceRequestCallbackFn callback_request;
++    CanasServiceResponseCallbackFn callback_response;
++    void* pstate;
++    uint8_t service_code;
++    uint8_t history_len;
++    CanasServiceFrameHistoryEntry history[1]; // flexible
++} CanasServiceSubscription;
++
++typedef struct
++{
++    uint64_t timestamp_usec;        ///< Empty entry contains zero timestamp
++    CanasMessage message;
++} CanasParamCacheEntry;
++
++typedef struct
++{
++    void* pnext;                    ///< Must be the first entry
++    CanasParamCallbackFn callback;
++    void* callback_arg;
++    uint16_t message_id;
++    uint8_t redund_count;
++    CanasParamCacheEntry redund_cache[1]; // flexible
++} CanasParamSubscription;
++
++typedef struct
++{
++    void* pnext;                    ///< Must be the first entry
++    uint16_t message_id;
++    uint8_t message_code;
++    int8_t interlacing_next_iface;
++} CanasParamAdvertisement;
++
++typedef struct
++{
++    CanasCanSendFn fn_send;         ///< Required
++    CanasCanFilterFn fn_filter;     ///< May be null if filters are not available
++
++    CanasTimestampFn fn_timestamp;  ///< Required
++
++    CanasMallocFn fn_malloc;        ///< Required; read the notes @ref CanasMallocFn
++    CanasFreeFn fn_free;            ///< Optional, may be NULL. Read the notes @ref CanasFreeFn
++
++    CanasHookCallbackFn fn_hook;    ///< Should be null if not used
++
++    uint8_t iface_count;            ///< Number of interfaces available
++    uint8_t filters_per_iface;      ///< Number of filters per interface. May be 0 if no filters available.
++
++    uint32_t service_request_timeout_usec;///< Time to wait for response from remote node. Default is okay.
++    uint16_t service_poll_interval_usec;  ///< Do not change
++    uint8_t service_frame_hist_len;       ///< Do not change
++    uint8_t service_channel;              ///< Service channel of the Local Node. May be of high or low priority.
++    uint32_t repeat_timeout_usec;         ///< Largest interval of repeated messages (default should be good enough)
++
++    uint8_t node_id;                ///< Local Node ID
++    uint8_t redund_channel_id;      ///< Local Node Redundancy Channel ID
++} CanasConfig;
++
++struct CanasInstanceStruct
++{
++    CanasConfig config;
++    void* pthis;                    ///< To be used by application
++
++    uint64_t last_service_ts;
++
++    CanasServiceSubscription* pservice_subs;
++    CanasParamSubscription* pparam_subs;
++    CanasParamAdvertisement* pparam_advs;
++};
++
++/**
++ * Make a pre-initialized config struct, with default values provided where possible.
++ * @return Pre-initialized @ref CanasConfig.
++ */
++CanasConfig canasMakeConfig(void);
++
++/**
++ * Initialize instance.
++ * @param [out] pi    Pointer to instance to be initialized
++ * @param [in]  pcfg  Pointer to the instance configuration
++ * @param [in]  pthis Application-specific pointer, goes to the corresponding instance field.
++ * @return            @ref CanasErrorCode
++ */
++int canasInit(CanasInstance* pi, const CanasConfig* pcfg, void* pthis);
++
++/**
++ * Update instance state.
++ * Must be called for every new incoming frame or by timeout.
++ * @note It is recommended to call this function at least every 10 ms
++ * @param [in] pi     Instance pointer
++ * @param [in] iface  Interface index from which the frame was received; ignored when no frame provided
++ * @param [in] pframe Pointer to the received frame, NULL when called by timeout
++ * @return            @ref CanasErrorCode
++ */
++int canasUpdate(CanasInstance* pi, int iface, const CanasCanFrame* pframe);
++
++/**
++ * Parameter subscriptions.
++ * Each parameter must be subscribed before you can read it from the bus.
++ * Each subscription can track an arbitrary number of redundant units transmitting this message, from 1 to 255.
++ * Functions of this group return @ref CanasErrorCode.
++ * @{
++ */
++int canasParamSubscribe(CanasInstance* pi, uint16_t msg_id, uint8_t redund_chan_count, CanasParamCallbackFn callback,
++                        void* callback_arg);
++int canasParamUnsubscribe(CanasInstance* pi, uint16_t msg_id);
++int canasParamRead(CanasInstance* pi, uint16_t msg_id, uint8_t redund_chan, CanasParamCallbackArgs* pargs);
++/**
++ * @}
++ */
++
++/**
++ * Parameter publications.
++ * Each parameter must be advertised before you can publish it to the bus.
++ * 'interlaced' stands for traffic sharing between all available interfaces.
++ * Functions of this group return @ref CanasErrorCode.
++ * @{
++ */
++int canasParamAdvertise(CanasInstance* pi, uint16_t msg_id, bool interlaced);
++int canasParamUnadvertise(CanasInstance* pi, uint16_t msg_id);
++int canasParamPublish(CanasInstance* pi, uint16_t msg_id, const CanasMessageData* pdata, uint8_t service_code);
++/**
++ * @}
++ */
++
++/**
++ * Node Service Protocol API.
++ * Normally you will not use it if you are not going to implement your own service.
++ * Functions of this group return @ref CanasErrorCode.
++ * @{
++ */
++int canasServiceSendRequest(CanasInstance* pi, const CanasMessage* pmsg);
++int canasServiceSendResponse(CanasInstance* pi, const CanasMessage* pmsg, uint8_t service_channel);
++int canasServiceRegister(CanasInstance* pi, uint8_t service_code, CanasServicePollCallbackFn callback_poll,
++                         CanasServiceRequestCallbackFn callback_request,
++                         CanasServiceResponseCallbackFn callback_response, void* pstate);
++int canasServiceUnregister(CanasInstance* pi, uint8_t service_code);
++int canasServiceSetState(CanasInstance* pi, uint8_t service_code, void* pstate);
++int canasServiceGetState(CanasInstance* pi, uint8_t service_code, void** ppstate);
++/**
++ * @}
++ */
++
++/**
++ * Dump a CAN frame for humans.
++ * @param [in]  pframe Pointer to frame to be dumped
++ * @param [out] pbuf   Pointer to output string buffer of size @ref CANAS_DUMP_BUF_LEN
++ * @return             pbuf
++ */
++char* canasDumpCanFrame(const CanasCanFrame* pframe, char* pbuf);
++
++/**
++ * Dump a CANaerospace message for humans.
++ * @param [in]  pframe Pointer to message to be dumped
++ * @param [out] pbuf   Pointer to output string buffer of size @ref CANAS_DUMP_BUF_LEN
++ * @return             pbuf
++ */
++char* canasDumpMessage(const CanasMessage* pmsg, char* pbuf);
++
++/**
++ * Convenience functions for Node Service Protocol services.
++ * They are just wrappers over corresponding function pointers in the configuration structure.
++ * @{
++ */
++uint64_t canasTimestamp(CanasInstance* pi);
++void* canasMalloc(CanasInstance* pi, int size);
++void canasFree(CanasInstance* pi, void* ptr);
++/**
++ * @}
++ */
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/src/Device/Driver/CANaerospace/canaerospace/driver.h b/src/Device/Driver/CANaerospace/canaerospace/driver.h
+new file mode 100644
+index 0000000000..59fdf985b0
+--- /dev/null
++++ b/src/Device/Driver/CANaerospace/canaerospace/driver.h
+@@ -0,0 +1,59 @@
++/*
++ * CANaerospace driver interface
++ * Pavel Kirienko, 2013 (pavel.kirienko@gmail.com)
++ */
++
++#ifndef CANAEROSPACE_DRIVER_H_
++#define CANAEROSPACE_DRIVER_H_
++
++#include <stdint.h>
++#include <stdbool.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * CAN ID masks
++ * @{
++ */
++static const uint32_t CANAS_CAN_MASK_STDID = ((uint32_t)0x000007FFu);
++static const uint32_t CANAS_CAN_MASK_EXTID = ((uint32_t)0x1FFFFFFFu);
++/**
++ * @}
++ */
++
++/**
++ * CAN flags, to be set on CAN ID
++ * @{
++ */
++static const uint32_t CANAS_CAN_FLAG_EFF = (1 << 31);  ///< Extended frame format
++static const uint32_t CANAS_CAN_FLAG_RTR = (1 << 30);  ///< Remote transmission request
++/**
++ * @}
++ */
++
++/**
++ * CAN frame
++ */
++typedef struct
++{
++    uint8_t data[8];
++    uint32_t id;      ///< Full ID (Standard + Extended) and flags (CANAS_CAN_FLAG_*)
++    uint8_t dlc;      ///< Data length code
++} CanasCanFrame;
++
++/**
++ * Acceptance filter configuration.
++ * Use flags to filter messages by type. @ref CANAS_CAN_FLAG_EFF @ref CANAS_CAN_FLAG_RTR.
++ */
++typedef struct
++{
++    uint32_t id;
++    uint32_t mask;
++} CanasCanFilterConfig;
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/src/Device/Driver/CANaerospace/canaerospace/message.h b/src/Device/Driver/CANaerospace/canaerospace/message.h
+new file mode 100644
+index 0000000000..7d4813d944
+--- /dev/null
++++ b/src/Device/Driver/CANaerospace/canaerospace/message.h
+@@ -0,0 +1,207 @@
++/*
++ * Message definitions
++ * Pavel Kirienko, 2013 (pavel.kirienko@gmail.com)
++ */
++
++#ifndef CANAEROSPACE_MESSAGE_H_
++#define CANAEROSPACE_MESSAGE_H_
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef enum {
++    CANAS_PARAM_DISTRIBUTION_DEFAULT = 0
++} CanasParamIdDistributionMode;
++
++typedef enum {
++    CANAS_MSGTYPE_EMERGENCY_EVENT_MIN = 0,
++    CANAS_MSGTYPE_EMERGENCY_EVENT_MAX = 127,
++
++    CANAS_MSGTYPE_NODE_SERVICE_HIGH_MIN = 128,
++    CANAS_MSGTYPE_NODE_SERVICE_HIGH_MAX = 199,
++
++    CANAS_MSGTYPE_USER_DEFINED_HIGH_MIN = 200,
++    CANAS_MSGTYPE_USER_DEFINED_HIGH_MAX = 299,
++
++    CANAS_MSGTYPE_NORMAL_OPERATION_MIN = 300,
++    CANAS_MSGTYPE_NORMAL_OPERATION_MAX = 1799,
++
++    CANAS_MSGTYPE_USER_DEFINED_LOW_MIN = 1800,
++    CANAS_MSGTYPE_USER_DEFINED_LOW_MAX = 1899,
++
++    CANAS_MSGTYPE_DEBUG_SERVICE_MIN = 1900,
++    CANAS_MSGTYPE_DEBUG_SERVICE_MAX = 1999,
++
++    CANAS_MSGTYPE_NODE_SERVICE_LOW_MIN = 2000,
++    CANAS_MSGTYPE_NODE_SERVICE_LOW_MAX = 2031
++} CanasMessageTypeID;
++
++typedef enum {
++    BODY_LONG_ACC_ID = 300,    /* body longitudinal acceleration */
++    BODY_LAT_ACC_ID = 301,    /* body lateral acceleration */
++    BODY_NORM_ACC_ID = 302,    /* body normal acceleration */
++    BODY_PITCH_ANGLE = 311,
++    BODY_ROLL_ANGLE = 312,
++    INDICATED_AIRSPEED = 315,
++    TRUE_AIRSPEED = 316,
++    BARO_CORRECTION_ID = 319,    /* barometric correction (QNH) */
++    HEADING_ANGLE = 321,
++    STANDARD_ALTITUDE = 322,
++    STATIC_PRESSURE = 326,
++    WIND_SPEED_ID  = 333,         /* wind speed in [m/s] */
++    WIND_DIRECTION_ID = 334,      /* wind direction in degrees */
++    AIRMASS_SPEED_VERTICAL = 354, /* Vertical speed of the airmass earth NED (negative is lift)*/
++    OUTSIDE_AIR_TEMP_ID = 335,    /* outside air temperature */
++
++    GPS_AIRCRAFT_LATITUDE = 1036,
++    GPS_AIRCRAFT_LONGITUDE = 1037,
++    GPS_AIRCRAFT_HEIGHTABOVE_ELLIPSOID = 1038,
++    GPS_GROUND_SPEED = 1039,
++    GPS_TRUE_TRACK = 1040,
++    UTC = 1200,
++
++    FLARM_STATE_ID = 1300,
++    FLARM_OBJECT_AL3_ID = 1301,
++    FLARM_OBJECT_AL2_ID = 1302,
++    FLARM_OBJECT_AL1_ID = 1303,
++    FLARM_OBJECT_AL0_ID = 1304,
++
++    ADSB_STATE_ID = 1305,
++
++    VARIO_MODE_ID = 1510,
++    MCCRADY_VALUE_ID  = 1518,
++    BARO_ALT_CORR_ID  = 1519 /* barometric altitude corretion in meters: altQNH = altSTD + <value> */
++                             /* SC = 0: QNH  SC = 1: QFE */
++
++} CanIDsForXCSoar;
++
++
++typedef enum {
++    CANAS_SERVICE_CHANNEL_HIGH_MIN = 0,
++    CANAS_SERVICE_CHANNEL_HIGH_MAX = 35,
++
++    CANAS_SERVICE_CHANNEL_LOW_MIN = 100,
++    CANAS_SERVICE_CHANNEL_LOW_MAX = 115
++} CanasServiceChannelID;
++
++typedef enum {
++    CANAS_DATATYPE_NODATA,
++    CANAS_DATATYPE_ERROR,
++
++    CANAS_DATATYPE_FLOAT,
++
++    CANAS_DATATYPE_LONG,
++    CANAS_DATATYPE_ULONG,
++    CANAS_DATATYPE_BLONG,
++
++    CANAS_DATATYPE_SHORT,
++    CANAS_DATATYPE_USHORT,
++    CANAS_DATATYPE_BSHORT,
++
++    CANAS_DATATYPE_CHAR,
++    CANAS_DATATYPE_UCHAR,
++    CANAS_DATATYPE_BCHAR,
++
++    CANAS_DATATYPE_SHORT2,
++    CANAS_DATATYPE_USHORT2,
++    CANAS_DATATYPE_BSHORT2,
++
++    CANAS_DATATYPE_CHAR4,
++    CANAS_DATATYPE_UCHAR4,
++    CANAS_DATATYPE_BCHAR4,
++
++    CANAS_DATATYPE_CHAR2,
++    CANAS_DATATYPE_UCHAR2,
++    CANAS_DATATYPE_BCHAR2,
++
++    CANAS_DATATYPE_MEMID,
++    CANAS_DATATYPE_CHKSUM,
++
++    CANAS_DATATYPE_ACHAR,
++    CANAS_DATATYPE_ACHAR2,
++    CANAS_DATATYPE_ACHAR4,
++
++    CANAS_DATATYPE_CHAR3,
++    CANAS_DATATYPE_UCHAR3,
++    CANAS_DATATYPE_BCHAR3,
++    CANAS_DATATYPE_ACHAR3,
++
++    CANAS_DATATYPE_DOUBLEH,
++    CANAS_DATATYPE_DOUBLEL,
++
++    CANAS_DATATYPE_RESVD_BEGIN_,
++    CANAS_DATATYPE_RESVD_END_ = 99,
++
++    CANAS_DATATYPE_UDEF_BEGIN_ = 100,
++    CANAS_DATATYPE_UDEF_END_ = 255,
++
++    CANAS_DATATYPE_ALL_END_ = 255
++} CanasStandardDataTypeID;
++
++typedef union {
++    uint32_t ERROR;
++
++    float FLOAT;
++
++    int32_t LONG;
++    uint32_t ULONG;
++    uint32_t BLONG;
++
++    int16_t SHORT;
++    uint16_t USHORT;
++    uint16_t BSHORT;
++
++    int8_t CHAR;
++    uint8_t UCHAR;
++    uint8_t BCHAR;
++
++    int16_t SHORT2[2];
++    uint16_t USHORT2[2];
++    uint16_t BSHORT2[2];
++
++    int8_t CHAR4[4];
++    uint8_t UCHAR4[4];
++    uint8_t BCHAR4[4];
++
++    int8_t CHAR2[2];
++    uint8_t UCHAR2[2];
++    uint8_t BCHAR2[2];
++
++    uint32_t MEMID;
++    uint32_t CHKSUM;
++
++    uint8_t ACHAR;
++    uint8_t ACHAR2[2];
++    uint8_t ACHAR4[4];
++
++    int8_t CHAR3[3];
++    uint8_t UCHAR3[3];
++    uint8_t BCHAR3[3];
++    uint8_t ACHAR3[3];
++
++    uint32_t DOUBLEH;
++    uint32_t DOUBLEL;
++} CanasDataContainer;
++
++typedef struct {
++    uint8_t type;                 ///< @ref CanasStandardDataTypeID or custom
++    uint8_t length;               ///< Ignored with standard datatypes; required otherwise. Leave zero if unused.
++    CanasDataContainer container;
++} CanasMessageData;
++
++typedef struct {
++    uint8_t node_id;
++    uint8_t data_type;
++    uint8_t service_code;
++    uint8_t message_code;
++    CanasMessageData data;
++} CanasMessage;
++
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/src/Device/Driver/CANaerospace/debug.h b/src/Device/Driver/CANaerospace/debug.h
+new file mode 100644
+index 0000000000..8ab3ef3334
+--- /dev/null
++++ b/src/Device/Driver/CANaerospace/debug.h
+@@ -0,0 +1,27 @@
++/*
++ * Debug stuff, should only be used for library development
++ * Pavel Kirienko, 2013 (pavel.kirienko@gmail.com)
++ */
++
++#ifndef CANAEROSPACE_DEBUG_H_
++#define CANAEROSPACE_DEBUG_H_
++
++//#if CANAEROSPACE_DEBUG // todo -- define somewhere !
++
++#include <stdio.h>
++#include "canaerospace/canaerospace.h"
++
++// Debugging can only work in single-threaded environment
++static char _canas_debug_strbuf_dumpframe[CANAS_DUMP_BUF_LEN] __attribute__((unused));
++
++#  define CANAS_DUMPFRAME(pframe) canasDumpCanFrame(pframe, _canas_debug_strbuf_dumpframe)
++#  define CANAS_TRACE(...) printf(">> "__VA_ARGS__)
++
++#else
++
++#  define CANAS_DUMPFRAME(pframe) ((void)0)
++#  define CANAS_TRACE(...) ((void)0)
++
++//#endif
++
++#endif
+diff --git a/src/Device/Driver/CANaerospace/marshal.c b/src/Device/Driver/CANaerospace/marshal.c
+new file mode 100644
+index 0000000000..36a8ac4157
+--- /dev/null
++++ b/src/Device/Driver/CANaerospace/marshal.c
+@@ -0,0 +1,169 @@
++/*
++ * Message payload conversions
++ * Pavel Kirienko, 2013 (pavel.kirienko@gmail.com)
++ */
++
++#include <stdlib.h>
++#include <string.h>
++#include "marshal.h"
++#include "debug.h"
++
++
++#define IS_UDEF(type) ((type) >= CANAS_DATATYPE_UDEF_BEGIN_ && (type) <= CANAS_DATATYPE_UDEF_END_)
++
++#if __BYTE_ORDER__ == __BIG_ENDIAN
++#  define SWITCH(x)
++#else
++
++static inline void _switchByteOrder(void* ptr, int len)
++{
++    uint8_t tmp[4], *pbyte = ptr;
++    if (len == 2)
++    {
++        memcpy(tmp, ptr, 2);
++        pbyte[0] = tmp[1];
++        pbyte[1] = tmp[0];
++    }
++    else if (len == 4)
++    {
++        memcpy(tmp, ptr, 4);
++        pbyte[0] = tmp[3];
++        pbyte[1] = tmp[2];
++        pbyte[2] = tmp[1];
++        pbyte[3] = tmp[0];
++    }
++}
++
++#  define SWITCH(x) _switchByteOrder(&(x), sizeof(x))
++#endif
++
++#define MARSHAL_RESULT_ERROR -1
++#define MARSHAL_RESULT_UDEF  -2
++
++static int _marshal(CanasMessageData* pmsg)
++{
++    switch (pmsg->type)
++    {
++    case CANAS_DATATYPE_NODATA:
++        return 0;
++
++    case CANAS_DATATYPE_FLOAT:
++        /*
++         * Target platform must support IEEE754 floats. The good news that almost every platform does that.
++         * But if some platform doesn't, proper converting from native float
++         * representation to IEEE754 (and vice versa) must be implemented somewhere here.
++         */
++        // FALLTHROUGH
++    case CANAS_DATATYPE_ERROR:
++    case CANAS_DATATYPE_LONG:
++    case CANAS_DATATYPE_ULONG:
++    case CANAS_DATATYPE_BLONG:
++        SWITCH(pmsg->container.ULONG);
++        return 4;
++
++    case CANAS_DATATYPE_SHORT:
++    case CANAS_DATATYPE_USHORT:
++    case CANAS_DATATYPE_BSHORT:
++        SWITCH(pmsg->container.USHORT);
++        return 2;
++
++    case CANAS_DATATYPE_CHAR:
++    case CANAS_DATATYPE_UCHAR:
++    case CANAS_DATATYPE_BCHAR:
++        return 1;
++
++    case CANAS_DATATYPE_SHORT2:
++    case CANAS_DATATYPE_USHORT2:
++    case CANAS_DATATYPE_BSHORT2:
++        SWITCH(pmsg->container.USHORT2[0]);
++        SWITCH(pmsg->container.USHORT2[1]);
++        return 4;
++
++    case CANAS_DATATYPE_CHAR4:
++    case CANAS_DATATYPE_UCHAR4:
++    case CANAS_DATATYPE_BCHAR4:
++        return 4;
++
++    case CANAS_DATATYPE_CHAR2:
++    case CANAS_DATATYPE_UCHAR2:
++    case CANAS_DATATYPE_BCHAR2:
++        return 2;
++
++    case CANAS_DATATYPE_MEMID:
++    case CANAS_DATATYPE_CHKSUM:
++        SWITCH(pmsg->container.MEMID);
++        return 4;
++
++    case CANAS_DATATYPE_ACHAR:
++        return 1;
++
++    case CANAS_DATATYPE_ACHAR2:
++        return 2;
++
++    case CANAS_DATATYPE_ACHAR4:
++        return 4;
++
++    case CANAS_DATATYPE_CHAR3:
++    case CANAS_DATATYPE_UCHAR3:
++    case CANAS_DATATYPE_BCHAR3:
++    case CANAS_DATATYPE_ACHAR3:
++        return 3;
++
++    case CANAS_DATATYPE_DOUBLEH:
++    case CANAS_DATATYPE_DOUBLEL:
++        // See note about IEEE754 compatibility above.
++        SWITCH(pmsg->container.DOUBLEL);
++        return 4;
++
++    default:
++        if (IS_UDEF(pmsg->type) && pmsg->length <= 4)
++            return MARSHAL_RESULT_UDEF;
++        CANAS_TRACE("marshal: unknown data type %02x, udf_len=%i\n", (int)pmsg->type, (int)pmsg->length);
++        return MARSHAL_RESULT_ERROR;
++    }
++}
++
++int canasHostToNetwork(uint8_t* pdata, const CanasMessageData* phost)
++{
++    if (pdata == NULL || phost == NULL)
++        return -CANAS_ERR_ARGUMENT;
++
++    CanasMessageData nwk = *phost;
++    const int ret = _marshal(&nwk);
++    if (ret >= 0)
++    {
++        memcpy(pdata, &nwk.container, ret);
++        return ret;
++    }
++    if (ret == MARSHAL_RESULT_UDEF)
++    {
++        memcpy(pdata, &nwk.container, nwk.length);
++        return nwk.length;
++    }
++    return -CANAS_ERR_BAD_DATA_TYPE;
++}
++
++int canasNetworkToHost(CanasMessageData* phost, const uint8_t* pdata, uint8_t datalen, uint8_t datatype)
++{
++    if (pdata == NULL || phost == NULL)
++        return -CANAS_ERR_ARGUMENT;
++    if (datalen > 4)
++        return -CANAS_ERR_BAD_DATA_TYPE;
++
++    memset(phost, 0, sizeof(*phost));
++    phost->type = datatype;
++    phost->length = datalen;             // For standard types this value should be ignored.
++    memcpy(&phost->container, pdata, datalen);
++
++    const int ret = _marshal(phost);
++    if (ret >= 0)
++    {
++        if (ret == datalen)
++            return ret;
++        CANAS_TRACE("marshal n2h: datalen mismatch: got %i, declared %i\n", (int)datalen, (int)ret);
++        return -CANAS_ERR_BAD_DATA_TYPE;
++    }
++    if (ret == MARSHAL_RESULT_UDEF)
++        return datalen;
++    return -CANAS_ERR_BAD_DATA_TYPE;
++}
+diff --git a/src/Device/Driver/CANaerospace/marshal.h b/src/Device/Driver/CANaerospace/marshal.h
+new file mode 100644
+index 0000000000..2eb44e64e2
+--- /dev/null
++++ b/src/Device/Driver/CANaerospace/marshal.h
+@@ -0,0 +1,22 @@
++/*
++ * Message payload conversions
++ * Pavel Kirienko, 2013 (pavel.kirienko@gmail.com)
++ */
++
++#ifndef CANAEROSPACE_MARSHAL_H_
++#define CANAEROSPACE_MARSHAL_H_
++
++#include <stdbool.h>
++#include "canaerospace/canaerospace.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++int canasHostToNetwork(uint8_t* pdata, const CanasMessageData* phost);
++int canasNetworkToHost(CanasMessageData* phost, const uint8_t* pdata, uint8_t datalen, uint8_t datatype);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/src/Device/Driver/FLARM/flarmPropagated.cpp b/src/Device/Driver/FLARM/flarmPropagated.cpp
+new file mode 100644
+index 0000000000..25351ee45a
+--- /dev/null
++++ b/src/Device/Driver/FLARM/flarmPropagated.cpp
+@@ -0,0 +1,128 @@
++/*
++ * Copyright (C) 2010-2013 triadis engineering GmbH all rights reserved.
++ *
++ * flarmPropagated.cpp
++ *
++ * 
++ *
++ * Created on: 14.03.2013
++ *     Author: sam
++ */
++
++#include <math.h>
++
++#include <Device/Driver/FLARM/flarmPropagated.hpp>
++
++
++//static int16_t calcBearing(int RelEast, int RelNorth);
++
++uint32_t getFlarmId(const CanasMessage *canasMessage);
++
++/*
++ * restauriert flarm FLAU daten auf einer sequenz von CANas messages
++ * msg: die CAN message mit id FLARM_STATE_ID
++ * alt: altitude
++ * objectData:   pointer auf FlarmMostImportantObjectData_t
++ * flarmState:   pointer auf FlarmDeviceState_t
++ * return: true wenn daten komplet
++ */
++bool canasFlarmStatePropagated(const CanasMessage *canasMessage, int altitude, FlarmMostImportantObjectData *objectData,
++                               FlarmState *flarmState) {
++
++    switch (canasMessage->service_code) {
++        case 0: {
++            objectData->TargetVectorValid = canasMessage->data.container.CHAR4[0] >> 4 & 0x01;
++            flarmState->RxDevicesCount = canasMessage->data.container.UCHAR4[1];
++            flarmState->TxState = canasMessage->data.container.UCHAR4[0] & 0x01;
++            flarmState->GpsState = canasMessage->data.container.UCHAR4[0] >> 1 & 0x03;
++            flarmState->PowerState = canasMessage->data.container.UCHAR4[0] >> 3 & 0x01;
++            flarmState->State = canasMessage->data.container.UCHAR4[2];
++            flarmState->ErrorCode = canasMessage->data.container.UCHAR4[3];
++            flarmState->GpsAltitude = altitude;  // GPS altitude from flarm. TODO isu hat genauere GPS alt
++            if (!(canasMessage->data.container.UCHAR4[0] >> 4 & 0x01)) {
++                objectData->AlarmLevel = 3;
++                return true;
++            }
++            break;
++        }
++
++        case 1: {
++            objectData->AlarmLevel = canasMessage->data.container.UCHAR4[0] & 0x7;
++            objectData->AlarmType = canasMessage->data.container.UCHAR4[0] >> 3 & 0x07;
++            objectData->ID = getFlarmId(canasMessage);
++            break;
++        }
++
++        case 2: {
++            objectData->RelVertical = canasMessage->data.container.USHORT2[0];
++            objectData->RelHorizontal = canasMessage->data.container.USHORT2[1];
++            break;
++        }
++
++        case 3: {
++            objectData->RelBearing = canasMessage->data.container.SHORT;
++            if (objectData->AlarmType == FLATOBSTACLEALARM) {
++                objectData->RelBearing = 0;
++                objectData->RelVertical = 0;
++                objectData->ID = 0;
++            }
++            return true;
++        }
++    }
++    return false;
++}
++
++/*
++ * restauriert flarm FLAU daten auf einer sequenz von CANas messages
++ * msg: die CAN message mit id FLARM_STATE_ID
++ * flarmObjectData:   pointer auf FlarmMostImportantObjectData_t
++ * S:   pointer auf FlarmDeviceState_t
++ * return: true wenn daten komplet
++ */
++bool canasFlarmObjectPropagated(const CanasMessage *canasMessage, int canid, FlarmObjectData *flarmObjectData) {
++
++    auto messageindex = canasMessage->service_code & 0x0f;
++    auto validFlags = canasMessage->service_code >> 4 & 0x0f;
++
++    switch (messageindex) {
++        case 0: {
++            flarmObjectData->AlarmLevel = FLARM_OBJECT_AL0_ID - canid;
++            flarmObjectData->RelNorth = canasMessage->data.container.USHORT2[0];
++            flarmObjectData->RelEast = canasMessage->data.container.USHORT2[1];
++            flarmObjectData->RelHorizontal = sqrtl(flarmObjectData->RelNorth * flarmObjectData->RelNorth +
++                                                   flarmObjectData->RelEast * flarmObjectData->RelEast);
++            break;
++        }
++
++        case 1: {
++            flarmObjectData->RelVertical = canasMessage->data.container.USHORT2[0];
++            flarmObjectData->Track = canasMessage->data.container.USHORT2[1];
++            flarmObjectData->valid.track = (validFlags & 0x2f) != 0;
++            break;
++        }
++
++        case 2: {
++            flarmObjectData->GroundSpeed = canasMessage->data.container.UCHAR4[0];
++            flarmObjectData->Type = canasMessage->data.container.UCHAR4[1];
++            flarmObjectData->ClimbRate = canasMessage->data.container.CHAR4[2];
++            flarmObjectData->TurnRate = canasMessage->data.container.UCHAR4[3];
++            flarmObjectData->valid.groundSpeed = (validFlags & 0x1f) != 0;
++            flarmObjectData->valid.climbRate = (validFlags & 0x4f) != 0;
++            flarmObjectData->valid.turnRate = (validFlags & 0x8f) != 0;
++            break;
++        }
++
++        case 3: {
++            flarmObjectData->IdType = canasMessage->data.container.UCHAR4[0];
++            flarmObjectData->ID = getFlarmId(canasMessage);
++            return true;
++        }
++    }
++    return false;
++}
++
++uint32_t getFlarmId(const CanasMessage *canasMessage) {
++    return (canasMessage->data.container.UCHAR4[3] & 0xFF) |
++           (canasMessage->data.container.UCHAR4[2] & 0xFF) << 8 |
++           (canasMessage->data.container.UCHAR4[1] & 0xFF) << 16;
++}
+diff --git a/src/Device/Driver/FLARM/flarmPropagated.hpp b/src/Device/Driver/FLARM/flarmPropagated.hpp
+new file mode 100644
+index 0000000000..0a76b422f2
+--- /dev/null
++++ b/src/Device/Driver/FLARM/flarmPropagated.hpp
+@@ -0,0 +1,35 @@
++/*
++ * Copyright (C) 2010-2013 triadis engineering GmbH all rights reserved.
++ *
++ * flarmPropagated.hpp
++ *
++ * 
++ *
++ * Created on: 14.03.2013
++ *     Author: sam
++ */
++
++#ifndef FLARMPROPAGATED_H
++#define FLARMPROPAGATED_H
++
++#include <Device/Driver/CANaerospace/marshal.h>
++#include <Device/Driver/CANaerospace/FlarmMessage.h>
++
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#define FLATOBSTACLEALARM 3
++
++bool
++canasFlarmStatePropagated(const CanasMessage *phost, int altitude, FlarmMostImportantObjectData *objectData, FlarmState *flarmState);
++bool canasFlarmObjectPropagated(const CanasMessage *phost, int canid, FlarmObjectData *flarmObjectData);
++
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif // FLARMPROPAGATED_H
+diff --git a/src/Device/Port/CANPort.cpp b/src/Device/Port/CANPort.cpp
+new file mode 100644
+index 0000000000..1e81954f80
+--- /dev/null
++++ b/src/Device/Port/CANPort.cpp
+@@ -0,0 +1,147 @@
++/*
++Copyright_License {
++
++  XCSoar Glide Computer - http://www.xcsoar.org/
++  Copyright (C) 2000-2016 The XCSoar Project
++  A detailed list of copyright holders can be found in the file "AUTHORS".
++
++  This program is free software; you can redistribute it and/or
++  modify it under the terms of the GNU General Public License
++  as published by the Free Software Foundation; either version 2
++  of the License, or (at your option) any later version.
++
++  This program is distributed in the hope that it will be useful,
++  but WITHOUT ANY WARRANTY; without even the implied warranty of
++  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++  GNU General Public License for more details.
++
++  You should have received a copy of the GNU General Public License
++  along with this program; if not, write to the Free Software
++  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++}
++*/
++
++#include "CANPort.hpp"
++#include "net/SocketError.hxx"
++#include "Device/Error.hpp"
++#include "net/if.h"
++#include "event/Call.hxx"
++#include "sys/socket.h"
++#include <sys/ioctl.h>
++#include <linux/can.h>
++#include <cstring>
++
++CANPort::CANPort(EventLoop &event_loop, const TCHAR *port_name,
++                 PortListener *_listener, DataHandler &_handler)
++                 : BufferedPort(_listener, _handler), socket(event_loop, BIND_THIS_METHOD(OnSocketReady))
++{
++  UniqueSocketDescriptor s;
++
++  if (!s.Create(AF_CAN, SOCK_RAW, CAN_RAW))
++    throw MakeSocketError("Failed to create socket");
++
++  struct ifreq ifr;
++  strcpy(ifr.ifr_name, port_name);
++  int ret = ioctl(s.Get(), SIOCGIFINDEX, &ifr);
++
++  if (ret != 0)
++    throw MakeErrno("Can not connect");
++
++  struct sockaddr_can addr = {0};
++  addr.can_family = AF_CAN;
++  addr.can_ifindex = ifr.ifr_ifindex;
++
++  ret = bind(s.Get(), (struct sockaddr *) &addr, sizeof(addr));
++  if (ret != 0)
++    throw MakeErrno("Failed binding socket");
++
++  socket.Open(s.Release());
++
++  BlockingCall(event_loop, [this](){
++    socket.ScheduleRead();
++  });
++}
++
++CANPort::~CANPort() noexcept
++{
++  BlockingCall(GetEventLoop(), [this]()
++  {
++    socket.Close();
++  });
++}
++
++PortState
++CANPort::GetState() const noexcept
++{
++  if (socket.IsDefined())
++    return PortState::READY;
++  else
++    return PortState::FAILED;
++}
++
++size_t
++CANPort::Write(std::span<const std::byte> src)
++{
++  if (!socket.IsDefined())
++    return 0;
++
++  ssize_t nbytes = socket.GetSocket().Write(src);
++  if (nbytes < 0)
++    // TODO check EAGAIN?
++    return 0;
++
++  return nbytes;
++}
++
++void
++CANPort::OnSocketReady(unsigned) noexcept
++try {
++  std::byte input[sizeof(struct can_frame)];
++  ssize_t nbytes;
++  nbytes = socket.GetSocket().Read(input);
++  if (nbytes < 0)
++    throw MakeSocketError("Failed to receive");
++
++  if (nbytes == 0) {
++    socket.Close();
++    StateChanged();
++    return;
++  }
++
++  DataReceived({input, std::size_t(nbytes)});
++} catch (...) {
++  socket.Close();
++  StateChanged();
++  Error(std::current_exception());
++}
++
++//    // todo -- temporary, to be moved to CANaerospace.cpp!
++//    const std::vector<uint32_t> can_ids{
++//            INDICATED_AIRSPEED, TRUE_AIRSPEED,
++//            HEADING_ANGLE,
++//            STANDARD_ALTITUDE,
++//            STATIC_PRESSURE,
++//            AIRMASS_SPEED_VERTICAL,
++//            GPS_AIRCRAFT_LATITUDE,
++//            GPS_AIRCRAFT_LONGITUDE,
++//            GPS_AIRCRAFT_HEIGHTABOVE_ELLIPSOID,
++//            GPS_GROUND_SPEED,
++//            GPS_TRUE_TRACK,
++//            UTC,
++//            FLARM_STATE_ID,
++//            FLARM_OBJECT_AL3_ID,
++//            FLARM_OBJECT_AL2_ID,
++//            FLARM_OBJECT_AL1_ID,
++//            FLARM_OBJECT_AL0_ID
++//    };
++//    ret = SetFilter(can_ids);
++
++//int
++//CANPort::SetFilter(const std::vector<uint32_t> &can_ids) {
++//    can_filter rfilter[can_ids.size()];
++//    for (size_t i = 0; i < can_ids.size(); i++) {
++//        rfilter[i].can_id = can_ids[i];
++//        rfilter[i].can_mask = CAN_SFF_MASK;
++//    }
++//    return setsockopt(uniqueSocketDescriptor.Get() , SOL_CAN_RAW, CAN_RAW_FILTER, &rfilter, sizeof(rfilter));
++//}
+diff --git a/src/Device/Port/CANPort.hpp b/src/Device/Port/CANPort.hpp
+new file mode 100644
+index 0000000000..e3a90cb30b
+--- /dev/null
++++ b/src/Device/Port/CANPort.hpp
+@@ -0,0 +1,79 @@
++/*
++Copyright_License {
++
++  XCSoar Glide Computer - http://www.xcsoar.org/
++  Copyright (C) 2000-2016 The XCSoar Project
++  A detailed list of copyright holders can be found in the file "AUTHORS".
++
++  This program is free software; you can redistribute it and/or
++  modify it under the terms of the GNU General Public License
++  as published by the Free Software Foundation; either version 2
++  of the License, or (at your option) any later version.
++
++  This program is distributed in the hope that it will be useful,
++  but WITHOUT ANY WARRANTY; without even the implied warranty of
++  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++  GNU General Public License for more details.
++
++  You should have received a copy of the GNU General Public License
++  along with this program; if not, write to the Free Software
++  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++}
++*/
++
++#ifndef XCSOAR_DEVICE_CAN_PORT_HPP
++#define XCSOAR_DEVICE_CAN_PORT_HPP
++
++#include "BufferedPort.hpp"
++#include "event/SocketEvent.hxx"
++#include "net/UniqueSocketDescriptor.hxx"
++#include "unix/tchar.h"
++
++/**
++ * A CAN listener port class.
++ */
++class CANPort final : public BufferedPort
++{
++  SocketEvent socket;
++
++public:
++  /**
++   * Creates a new CANPort object, but does not open it yet.
++   *
++   * @param handler the callback object for input received on the
++   * port
++   */
++  CANPort(EventLoop &event_loop, const TCHAR *port_name,
++          PortListener *_listener, DataHandler &_handler);
++  /**
++   * Closes the serial port (Destructor)
++   */
++  virtual ~CANPort();
++
++  auto &GetEventLoop() const noexcept {
++    return socket.GetEventLoop();
++  }
++
++  /* virtual methods from class Port */
++  PortState GetState() const noexcept override;
++
++
++    bool Drain() override {
++    /* writes are synchronous */
++    return true;
++  }
++
++  void SetBaudrate([[maybe_unused]] unsigned baud_rate) {
++    }
++
++  unsigned GetBaudrate() const noexcept{
++      return 0;
++    }
++
++  std::size_t Write(std::span<const std::byte> src) override;
++
++protected:
++  void OnSocketReady(unsigned events) noexcept;
++};
++
++#endif
+diff --git a/src/Device/Port/ConfiguredPort.cpp b/src/Device/Port/ConfiguredPort.cpp
+index 245d60f6c5..da1ef47c89 100644
+--- a/src/Device/Port/ConfiguredPort.cpp
++++ b/src/Device/Port/ConfiguredPort.cpp
+@@ -26,6 +26,8 @@
+ #include "DumpPort.hpp"
+ #endif
+ 
++#include "CANPort.hpp"
++
+ #include <stdexcept>
+ #include <system_error>
+ 
+@@ -177,6 +179,9 @@ OpenPortInternal(EventLoop &event_loop, Cares::Channel &cares,
+     return std::make_unique<UDPPort>(event_loop, config.tcp_port,
+                                      listener, handler);
+ 
++  case DeviceConfig::PortType::CAN_INTERFACE:
++            return std::make_unique<CANPort>(event_loop, config.can_interface,
++                                             listener, handler);
+   case DeviceConfig::PortType::PTY: {
+ #if defined(HAVE_POSIX) && !defined(ANDROID)
+     if (config.path.empty())
+diff --git a/src/Device/Register.cpp b/src/Device/Register.cpp
+index 2691a52bc6..87cb7d259b 100644
+--- a/src/Device/Register.cpp
++++ b/src/Device/Register.cpp
+@@ -44,6 +44,7 @@
+ #include "Device/Driver/Stratux.hpp"
+ #include "util/Macros.hpp"
+ #include "util/StringAPI.hxx"
++#include "Device/Driver/CANaerospace.hpp"
+ 
+ #include <cassert>
+ 
+@@ -90,6 +91,7 @@ static const struct DeviceRegister *const driver_list[] = {
+   &condor3_driver,
+   &lx_eos_driver,
+   &stratux_driver,
++  &can_aerospace_driver,
+   nullptr
+ };
+ 
+diff --git a/src/Device/device.cpp b/src/Device/device.cpp
+index 48b4490bc7..bb07ec3af7 100644
+--- a/src/Device/device.cpp
++++ b/src/Device/device.cpp
+@@ -64,6 +64,9 @@ DeviceConfigOverlaps(const DeviceConfig &a, const DeviceConfig &b)
+   case DeviceConfig::PortType::TCP_LISTENER:
+   case DeviceConfig::PortType::UDP_LISTENER:
+     return a.tcp_port == b.tcp_port;
++
++  case DeviceConfig::PortType::CAN_INTERFACE:
++    return a.can_interface.equals(b.can_interface);
+   }
+ 
+   gcc_unreachable();
+diff --git a/src/Dialogs/Device/DeviceEditWidget.cpp b/src/Dialogs/Device/DeviceEditWidget.cpp
+index b8f2721d7b..9e202769d1 100644
+--- a/src/Dialogs/Device/DeviceEditWidget.cpp
++++ b/src/Dialogs/Device/DeviceEditWidget.cpp
+@@ -21,7 +21,7 @@ enum ControlIndex {
+   TCPPort,
+   I2CBus, I2CAddr, PressureUsage, Driver, UseSecondDriver, SecondDriver,
+   SyncFromDevice, SyncToDevice,
+-  K6Bt,
++  K6Bt, CAN_INTERFACE,
+ };
+ 
+ static void
+@@ -80,6 +80,13 @@ FillPress(DataFieldEnum &dfe) noexcept
+   dfe.addEnumText(_T("Pitot (airspeed)"), (unsigned)DeviceConfig::PressureUse::PITOT);
+ }
+ 
++static void
++FillCANDevices(DataFieldEnum &dfe) noexcept
++{
++  dfe.addEnumText(_T("can0"), 0U);
++  dfe.addEnumText(_T("vcan0"), 1U);
++}
++
+ /**
+  * The user can choose from the following engine types:
+  * None.
+@@ -134,6 +141,7 @@ DeviceEditWidget::SetConfig(const DeviceConfig &_config) noexcept
+   LoadValue(SyncToDevice, config.sync_to_device);
+   LoadValue(K6Bt, config.k6bt);
+   LoadValueEnum(EngineTypes, config.engine_type);
++  LoadValue(CAN_INTERFACE, config.can_interface);
+ 
+   UpdateVisibilities();
+ }
+@@ -208,6 +216,7 @@ DeviceEditWidget::UpdateVisibilities() noexcept
+   const bool k6bt = maybe_bluetooth && GetValueBoolean(K6Bt);
+   const bool uses_speed = DeviceConfig::UsesSpeed(type) || k6bt;
+   const bool maybe_engine_sensor = type == DeviceConfig::PortType::BLE_SENSOR;
++  const bool uses_can = DeviceConfig::UsesCANPort(type);
+ 
+   SetRowAvailable(BaudRate, uses_speed);
+   SetRowAvailable(BulkBaudRate, uses_speed &&
+@@ -235,6 +244,7 @@ DeviceEditWidget::UpdateVisibilities() noexcept
+                 CanSendSettings(GetDataField(Driver)));
+   SetRowAvailable(K6Bt, maybe_bluetooth);
+   SetRowAvailable(EngineTypes, maybe_engine_sensor);
++  SetRowVisible(CAN_INTERFACE, uses_can);
+ }
+ 
+ void
+@@ -340,6 +350,11 @@ DeviceEditWidget::Prepare(ContainerWindow &parent,
+              config.k6bt, this);
+   SetExpertRow(K6Bt);
+ 
++  DataFieldEnum *can_port_df = new DataFieldEnum(this);
++  FillCANDevices(*can_port_df);
++  can_port_df->SetValue(config.can_interface);
++  Add(_("interface"), nullptr, can_port_df);
++
+   UpdateVisibilities();
+ }
+ 
+@@ -408,6 +423,17 @@ FinishPortField(DeviceConfig &config, const DataFieldEnum &df) noexcept
+     config.port_type = new_type;
+     config.ioio_uart_id = (unsigned)ParseUnsigned(df.GetAsString());
+     return true;
++
++  case DeviceConfig::PortType::CAN_INTERFACE:
++    if (new_type == config.port_type &&
++        StringIsEqual(config.can_interface, df.GetAsString()))
++      return false;
++
++    config.port_type = new_type;
++    //config.can_interface = df.GetAsString(); // todo -- fix this!!
++    config.can_interface = _T("can0");
++    return true;
++
+   }
+ 
+   gcc_unreachable();
+diff --git a/src/Dialogs/Device/PortDataField.cpp b/src/Dialogs/Device/PortDataField.cpp
+index dbd54701a3..ca608a4c61 100644
+--- a/src/Dialogs/Device/PortDataField.cpp
++++ b/src/Dialogs/Device/PortDataField.cpp
+@@ -6,6 +6,7 @@
+ #include "Form/DataField/Enum.hpp"
+ #include "Language/Language.hpp"
+ #include "util/StringCompare.hxx"
++#include "../../Device/Config.hpp"
+ 
+ #ifdef HAVE_POSIX
+ #include "Device/Port/TTYEnumerator.hpp"
+@@ -51,6 +52,8 @@ static constexpr struct {
+   { DeviceConfig::PortType::TCP_LISTENER, N_("TCP port") },
+   { DeviceConfig::PortType::UDP_LISTENER, N_("UDP port") },
+ 
++  {DeviceConfig::PortType::CAN_INTERFACE, N_("CAN interface") },
++
+   { DeviceConfig::PortType::SERIAL, nullptr } /* sentinel */
+ };
+ 
+@@ -318,6 +321,10 @@ SetPort(DataFieldEnum &df, const DeviceConfig &config) noexcept
+     buffer.UnsafeFormat(_T("%d"), config.ioio_uart_id);
+     df.SetValue(buffer);
+     return;
++
++  case DeviceConfig::PortType::CAN_INTERFACE:
++    SetPort(df, config.port_type, config.can_interface);
++    return;
+   }
+ 
+   for (unsigned i = 0; port_types[i].label != nullptr; i++) {
+diff --git a/src/Profile/DeviceConfig.cpp b/src/Profile/DeviceConfig.cpp
+index 2724dd2d16..491a308a18 100644
+--- a/src/Profile/DeviceConfig.cpp
++++ b/src/Profile/DeviceConfig.cpp
+@@ -34,6 +34,7 @@ static const char *const port_type_strings[] = {
+   "ble_hm10",
+   "glider_link",
+   "android_usb_serial",
++  "can",
+   NULL
+ };
+ 
+@@ -198,6 +199,10 @@ Profile::GetDeviceConfig(const ProfileMap &map, unsigned n,
+   MakeDeviceSettingName(buffer, "Port", n, "SecondDevice");
+   map.Get(buffer, config.driver2_name);
+ 
++  MakeDeviceSettingName(buffer, "Port", n, "CANPortName");
++  map.Get(buffer, config.can_interface);
++
++  MakeDeviceSettingName(buffer, "Port", n, "CANPortBaudRate");
+   MakeDeviceSettingName(buffer, "Port", n, "EngineType");
+   if (!map.GetEnum(buffer, config.engine_type) ||
+       unsigned(config.engine_type) >= unsigned(DeviceConfig::EngineType::MAX))

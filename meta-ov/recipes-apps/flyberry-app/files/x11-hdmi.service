@@ -1,0 +1,12 @@
+[Unit]
+Description=X11 HDMI Display (Flyberry)
+After=systemd-user-sessions.service
+
+[Service]
+User=root
+Environment=DISPLAY=:0
+ExecStart=/usr/bin/startx /home/root/.xsession-hdmi -- :0 vt1 -layout LayoutHDMI
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

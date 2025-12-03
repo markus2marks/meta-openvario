@@ -1,0 +1,17 @@
+#!/bin/sh
+
+# --- Bildschirmrotation laden ---
+if [ -f /data/rotation.conf ]; then
+    . /data/rotation.conf
+    OUTPUT=$(xrandr | grep " connected" | head -n1 | awk '{print $1}')
+    if [ -n "$OUTPUT" ] && [ -n "$ROTATE" ]; then
+        xrandr --output "$OUTPUT" --rotate "$ROTATE"
+    fi
+fi
+
+xset s off
+xset -dpms
+xset s noblank
+
+matchbox-window-manager -use_cursor yes -use_titlebar no &
+exec /usr/bin/FlyberryApp

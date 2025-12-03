@@ -1,0 +1,12 @@
+[Unit]
+Description=X11 DSI Display (Matchbox-Terminal)
+After=systemd-user-sessions.service
+
+[Service]
+User=root
+Environment=DISPLAY=:1
+ExecStart=/usr/bin/startx /home/root/.xsession-dsi -- :1 vt2 -layout LayoutDSI
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

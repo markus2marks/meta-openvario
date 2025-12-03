@@ -1,0 +1,10 @@
+#!/bin/sh
+# /etc/X11/Xsession.d/99matchbox
+# Startet die Flyberry-App unter X11 mit matchbox-window-manager
+
+matchbox-window-manager -use_cursor no -use_titlebar no &
+
+# Warte kurz, bis X läuft
+sleep 1
+
+exec /usr/bin/FlyberryApp
