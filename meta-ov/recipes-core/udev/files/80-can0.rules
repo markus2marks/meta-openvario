@@ -1,0 +1,3 @@
+# Automatically configure CAN0 interface for 500000 bit/s on device add
+ACTION=="add", KERNEL=="can0", RUN+="/sbin/ip link set can0 type can bitrate 500000"
+ACTION=="add", KERNEL=="can0", RUN+="/sbin/ip link set can0 up"
