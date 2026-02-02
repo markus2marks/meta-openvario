@@ -22,6 +22,7 @@ IMAGE_INSTALL += "\
     rauc \
     flyberry-app \
     can-utils \
+    systemd-networkd \
 "
 
 #   xcsoar 

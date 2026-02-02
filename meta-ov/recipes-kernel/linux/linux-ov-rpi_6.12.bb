@@ -8,12 +8,12 @@ COMPATIBLE_MACHINE ?= "^rpi$"
 PE = "1"
 PV = "${LINUX_VERSION}+git${SRCPV}"
 
-LINUX_VERSION ?= "6.12.25"
+LINUX_VERSION ?= "6.12.62"
 LINUX_RPI_BRANCH ?= "rpi-6.12.y"
 LINUX_RPI_KMETA_BRANCH ?= "yocto-6.12"
 
-SRCREV_machine = "3dd2c2c507c271d411fab2e82a2b3b7e0b6d3f16"
-SRCREV_meta = "1f6ab68a1d86836bf1b82b791df03da3cfeacb3f"
+SRCREV_machine = "a1073743767f9e7fdc7017ababd2a07ea0c97c1c"
+SRCREV_meta = "f7d83a5a4be20f4f4d3fcf3b1fbd23aa69bdc6ac"
 
 KMETA = "kernel-meta"
 inherit siteinfo rauc-integration
@@ -31,7 +31,6 @@ SRC_URI = " \
     file://flyberry.cfg \
     file://flyberry-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
     file://dxq5d5024.patch \
-    file://lvds.patch \
     file://vc4-kms-dsi-dxq5d5024-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
     file://rauc.cfg \
     file://lvds_bridge.cfg \
