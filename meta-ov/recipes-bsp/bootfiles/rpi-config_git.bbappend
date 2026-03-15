@@ -13,7 +13,7 @@ do_deploy:append () {
         echo "dtoverlay=ov-rpi4-57-lvds" >> $CONFIG
         
         echo "# sound driver" >> $CONFIG
-        echo "dtoverlay=max98357a, no-sdmode " >> $CONFIG
+        echo "dtoverlay=max98357a, no-sdmode" >> $CONFIG
 
         echo "# serial interfaces" >> $CONFIG
         echo "dtoverlay=uart2" >> $CONFIG
