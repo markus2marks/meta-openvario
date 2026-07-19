@@ -14,12 +14,12 @@ SRC_URI = "git://github.com/Flyberry-System/flyberry-app.git;protocol=https;bran
            file://10-dualscreen.conf \
            file://rotation.conf\
            "
-SRCREV = "b281a090723c0c7b96d94820af4878a5882f95fd"
+SRCREV = "138e5c385e59108c6f8ee137dc70c851dff7e793"
 
 S = "${WORKDIR}/git"
 
 DEPENDS = "qtbase qtdeclarative \
-           qtbase-native qtdeclarative-native qttools-native"
+           qtbase-native qtdeclarative-native qttools-native spdlog"
 
 inherit qt6-cmake
 
@@ -27,9 +27,9 @@ inherit qt6-cmake
 
 do_compile:append() {
     # Prüfen, ob qm-Dateien existieren und dann kopieren
-    if ls ${WORKDIR}/git/build/default/*.qm 1> /dev/null 2>&1; then
+    if ls ${WORKDIR}/git/languages/*.qm 1> /dev/null 2>&1; then
         echo "Kopiere QM-Dateien nach ${WORKDIR}/build/"
-        cp -v ${WORKDIR}/git/build/default/*.qm ${WORKDIR}/build/
+        cp -v ${WORKDIR}/git/languages/*.qm ${WORKDIR}/build/
     else
         echo "Keine QM-Dateien im Ordner ${WORKDIR}/git/build/default gefunden"
     fi

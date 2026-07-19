@@ -37,10 +37,13 @@ S = "${WORKDIR}/git"
 
 LC_LOCALE_PATH = "${datadir}/locale"
 
+# Keep .mo locale files in the main package instead of splitting into xcsoar-locale-* sub-packages
+PACKAGE_NO_LOCALE = "1"
+PACKAGES:remove = "${PN}-locale"
 
 SRC_URI += " \
 	file://0007-Disable-touch-screen-auto-detection.patch \
-	https://boostorg.jfrog.io/artifactory/main/release/1.87.0/source/boost_1_87_0.tar.bz2;sha256sum=af57be25cb4c4f4b413ed692fe378affb4352ea50fbe294a11ef548f4d527d89;unpack=0 \
+	https://boostorg.jfrog.io/artifactory/main/release/1.90.0/source/boost_1_90_0.tar.bz2;sha256sum=49551aff3b22cbc5c5a9ed3dbc92f0e23ea50a0f7325b0d198b705e8ee3fc305;unpack=0 \
 "
 
 inherit pkgconfig
@@ -60,14 +63,14 @@ EXTRA_OEMAKE = " \
 	CCACHE='' \
 	\
 	DEBUG=n DEBUG_GLIBCXX=n \
+	ENABLE_MESA_KMS=y GLES2=y \
 	GEOTIFF=n \
 	EGL=y \
-	USE_X11=y \
 "
 
 do_configure() {
 	install -d ${B}/output/download
-	cp ${WORKDIR}/boost_1_87_0.tar.bz2 ${B}/output/download/
+	cp ${WORKDIR}/boost_1_90_0.tar.bz2 ${B}/output/download/
 	oe_runmake boost
 }
 
@@ -85,5 +88,5 @@ do_install() {
 FILES:${PN} = " \
 	${bindir}/xcsoar \
 	${bindir}/vali-xcs \
-	${datadir}/locale/*/LC_MESSAGES/xcsoar.mo \
+	${LC_LOCALE_PATH}/*/LC_MESSAGES/xcsoar.mo \
 "

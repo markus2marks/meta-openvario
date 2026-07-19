@@ -30,6 +30,10 @@ SRC_URI = " \
     file://powersave.cfg \
     file://flyberry.cfg \
     file://flyberry-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
+    file://dxq5d5024.patch \
+    file://vc4-kms-dsi-dxq5d5024-overlay.dts;subdir=git/arch/arm/boot/dts/overlays \
+    file://rauc.cfg \
+    file://lvds_bridge.cfg \
     file://rauc.cfg \
     "
 

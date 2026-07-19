@@ -4,8 +4,9 @@
 PR="r0"
 RCONFLICTS:${PN}="xcsoar-testing"
 
-SRC_URI = "git://github.com/markus2marks/XCSoar.git;protocol=https;branch=canaerospace \
+SRC_URI = "git://github.com/XCSoar/XCSoar.git;protocol=https;branch=master \
 "
-SRCREV = "32ac5c90d5846c89e2f5a4678b5e0366dd7fcbd5"
+
+SRCREV = "9349329feae03a917b432033e386a30aaf137d22"
 
 require xcsoar.inc
