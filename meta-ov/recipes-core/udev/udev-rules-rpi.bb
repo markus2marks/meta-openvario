@@ -6,7 +6,7 @@ SRC_URI = "file://backlight.rules \
 	file://81-backlight.rules \
 	"
 
-do_install:ov-rpi4-64 () {
+do_install () {
     install -d ${D}${sysconfdir}/udev/rules.d
     install -m 0644 ${WORKDIR}/backlight.rules ${D}${sysconfdir}/udev/rules.d/
     install -m 0644 ${WORKDIR}/81-backlight.rules ${D}${sysconfdir}/udev/rules.d/
